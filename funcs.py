@@ -3,10 +3,14 @@ import os
 import shutil
 import time
 from datetime import datetime
-import exiftool
+import exiftool                     # exiftool.exe needs installing from exiftool.org, along with the PyExifTool package
 from dateutil.parser import parse
 import pathlib
 import concurrent.futures
+
+
+defaultsourcedir = r'C:\Users\james\PycharmProjects\Source'
+defaultdestdir = r'C:\Users\james\PycharmProjects\Dest'
 
 
 print ('###############START###############')
@@ -14,16 +18,11 @@ print ('\n')
 
 
 def printmetadata(files):
-    with exiftool.ExifTool() as et:
-        metadata = et.get_metadata_batch(files)
+    with exiftool.ExifToolHelper() as et:
+        metadata = et.get_metadata(files)
         print(metadata)
 
-
-# print ('\n')
-# printmetadata([r'E:\Pic sorting script\Source\2003-11-01/0001.JPG'])
-# print ('\n')
-
-
+# printmetadata(r'C:\Users\james\PycharmProjects\Source\2002-09\2002-09-19 18-38-34 - Dimage 2300.JPG')
 
 def checkslash(strng):
     z = strng[-1]
@@ -33,7 +32,6 @@ def checkslash(strng):
         return strng + '/'
 
 
-
 def copyfile(src_path, dst_path):
     split_input_path = os.path.split(src_path)
     orig_fname = split_input_path[1]
@@ -41,15 +39,11 @@ def copyfile(src_path, dst_path):
     split_output_path = os.path.split(dst_path)
     new_desired_fname = split_output_path[1]
     dst_folder = split_output_path[0] + '/'
-
     splitname_orig = os.path.splitext(orig_fname)
     splitname_new = os.path.splitext(new_desired_fname)
-
     extension = splitname_orig[1]
     new_fname = splitname_new[0] + extension
-
     pathlib.Path(dst_folder).mkdir(parents=True, exist_ok=True)
-
     n = 2
     # check if file exist in destination & rename if so
     while os.path.exists(dst_folder + new_fname):
@@ -59,13 +53,9 @@ def copyfile(src_path, dst_path):
         # Adding the new name
         new_fname = only_name + ' (' + str(n) + ')' + extension
         n = n + 1
-
     # copy file
     shutil.copy2(src_folder + orig_fname, dst_folder + new_fname)
     return dst_folder + new_fname
-
-
-# copyfile('E:/Pic sorting script/Source/2003-11-28/0001.JPG', 'E:/Pic sorting script/Dest/folder5/newname')
 
 
 def movefile(src_path, dst_path):
@@ -75,15 +65,11 @@ def movefile(src_path, dst_path):
     split_output_path = os.path.split(dst_path)
     new_desired_fname = split_output_path[1]
     dst_folder = split_output_path[0] + '/'
-
     splitname_orig = os.path.splitext(orig_fname)
     splitname_new = os.path.splitext(new_desired_fname)
-
     extension = splitname_orig[1]
     new_fname = splitname_new[0] + extension
-
     pathlib.Path(dst_folder).mkdir(parents=True, exist_ok=True)
-
     n = 2
     # check if file exist in destination & rename if so
     while os.path.exists(dst_folder + new_fname):
@@ -93,7 +79,6 @@ def movefile(src_path, dst_path):
         # Adding the new name
         new_fname = only_name + ' (' + str(n) + ')' + extension
         n = n + 1
-
     # copy file
     shutil.move(src_folder + orig_fname, dst_folder + new_fname)
     return dst_folder + new_fname
@@ -102,47 +87,29 @@ def movefile(src_path, dst_path):
 def getcdate(path):
     # get creation time in seconds
     ct_sec = os.path.getctime(path)
-
     # convert to date (in wrong format)
     ct_stamp_wrong = time.ctime(ct_sec)
-
     # Using the timestamp string to create a
     # time object/structure
     ct_obj = time.strptime(ct_stamp_wrong)
-
     # Transforming the time object to a timestamp
     # of ISO 8601 format
     ct_stamp = time.strftime("%Y-%m-%d %H-%M-%S", ct_obj)
-
     return ct_stamp
-
-
-# creattime = getcdate('E:/Pic sorting script/Source/2003-11-28/0001.JPG')
-# (f"The file was created at {creattime}")
-
 
 
 def getmdate(path):
     # get modification time in seconds
     mt_sec = os.path.getmtime(path)
-
     # convert to date (in wrong format)
     mt_stamp_wrong = time.ctime(mt_sec)
-
     # Using the timestamp string to create a
     # time object/structure
     mt_obj = time.strptime(mt_stamp_wrong)
-
     # Transforming the time object to a timestamp
     # of ISO 8601 format
     mt_stamp = time.strftime("%Y-%m-%d %H-%M-%S", mt_obj)
-
     return mt_stamp
-
-
-# modtime = getmdate(r'D:\Nextcloud\Pictures\James\Family Pics\Name is a date\2007-02-30/DSC00104.JPG')
-# print(f"The file was last modified at {modtime}")
-
 
 
 def gettdate(file):
@@ -164,17 +131,11 @@ def gettdate(file):
         return tagdata
 
 
-# print (gettdate(r'D:\Nextcloud\Pictures\James\Family Pics\Name is a date\2007-02-30/DSC00104.JPG'))
-
 def getcameramodel(file):
     # get camera model from metadata
     with exiftool.ExifTool() as et:
         tagdata = et.get_tag("Model", file)
         return tagdata
-
-
-# print (getcameramodel(r'E:\Pic sorting script\Source\2003-11-01/MVI_1835.MOV'))
-
 
 
 def setcdate(file, newcdate):
@@ -186,11 +147,6 @@ def setcdate(file, newcdate):
         et.execute(etcommand, filebytes)
 
 
-# setcdate("E:\Pic sorting script\Dest\2003-12\", "2017-04-02 16-42-52")
-# setcdate("E:/Pic sorting script/Source/2003-11-01/0001.JPG", getmdate(r'E:/Pic sorting script/Source/2003-11-01/0001.JPG'))
-
-
-
 def daysbetween(d1, d2):
     # earlier date goes first
     d1 = datetime.strptime(d1, "%Y-%m-%d %H-%M-%S")
@@ -198,17 +154,6 @@ def daysbetween(d1, d2):
     secondsapart = (d2 - d1).total_seconds()
     daysapart = secondsapart / 86400
     return daysapart
-
-
-# date1 = getcdate(r'E:\Pic sorting script\Source\2003-11-01/0001.JPG')
-# date2 = getmdate(r'E:\Pic sorting script\Source\2003-11-01/0001.JPG')
-# date3 = gettdate(r'E:\Pic sorting script\Source\2003-11-01/0001.JPG')
-# print (date1)
-# print (date2)
-# print (date3)
-# days = daysbetween(date1, date2)
-# print(days)
-
 
 
 def parentdirname(pathstr, levels=1):
@@ -219,10 +164,6 @@ def parentdirname(pathstr, levels=1):
     dirname = os.path.split(pathstr)[1]
     dirname = dirname.replace("_1", "")
     return dirname
-
-
-# print (parentdirname ('E:/Pic sorting script/Source/2003-11-01/0001.JPG', 1))
-
 
 
 def analysedate(date_input):
@@ -240,23 +181,12 @@ def analysedate(date_input):
         return False
 
 
-# print (analysedate("2012/4/6"))
-# print (analysedate(parentdirname ('E:/Pic sorting script/Source/2003-11-01/0001.JPG')))
-
-
-
 def getListOfFiles(directory):
     allFiles = list()
     for dirpath ,_ ,filenames in os.walk(directory):
         for f in filenames:
             allFiles.append(os.path.abspath(os.path.join(dirpath, f)))
     return allFiles
-
-
-# listoffiles = getListOfFiles(r'E:\Pic sorting script\Source\2003-11-28')
-# for i in listoffiles:
-#    print (i)
-
 
 
 def datelogic(file, filedate, folderdate):
@@ -300,19 +230,6 @@ def datelogic(file, filedate, folderdate):
         else:
             print ('Failed to get an accurate date for ' + file + ' because none of them agreed')
             return False
-
-
-
-def bulkprocess(dir, dest):
-    t0 = time.time()
-    listoffiles = getListOfFiles(dir)
-    # n_threads = len(listoffiles)
-    with concurrent.futures.ThreadPoolExecutor(48) as executor:
-        _ = [executor.submit(processfile, file, dir, dest) for file in listoffiles]
-    t1 = time.time()
-    totaltime = t1-t0
-    totaltime = round(totaltime)
-    print ('\nFinished in ' + str(totaltime) + ' seconds')
 
 
 def processfile(file, dir, dest):
@@ -363,10 +280,19 @@ def processfile(file, dir, dest):
     else:
         print (file + ' does not have an accepted extension; skipping...')
 
+# processfile (r'C:\Users\james\PycharmProjects\Source\2003-02\2003-02-16 08-55-24 - .JPG', r'C:\Users\james\PycharmProjects\Source\2003-02', r'C:\Users\james\PycharmProjects\Dest')
 
-# processfile (r'D:\Pictures in work\Family Pics\Name is a date\2002-08-16\james passport.jpg', r'D:\Pictures in work\Family Pics\Name is a date 2')
+def bulkprocess(dir, dest):
+    t0 = time.time()
+    listoffiles = getListOfFiles(dir)
+    with concurrent.futures.ThreadPoolExecutor(48) as executor:
+        _ = [executor.submit(processfile, file, dir, dest) for file in listoffiles]
+    t1 = time.time()
+    totaltime = t1-t0
+    totaltime = round(totaltime)
+    print ('\nFinished in ' + str(totaltime) + ' seconds')
 
-bulkprocess (r'C:\Users\james\PycharmProjects\Source', r'C:\Users\james\PycharmProjects\Dest')
+# bulkprocess (r'C:\Users\james\PycharmProjects\Source', r'C:\Users\james\PycharmProjects\Dest')
 
 
 def fixcreationdate(file):
@@ -377,6 +303,7 @@ def fixcreationdate(file):
         print ('Fixing creation date from ' + creationdate + ' to ' + modifieddate)
         setcdate(file, modifieddate)
     # print ('Finished!')
+
 
 def seriallyfixcreationdates(dir):
     print ('\nGetting list of files...')
@@ -391,6 +318,7 @@ def seriallyfixcreationdates(dir):
             setcdate(file, modifieddate)
     print ('Finished!')
 
+
 def bulkfixcreationdates(dir):
     t0 = time.time()
     print ('\nGetting list of files in ' + dir + '...')
@@ -404,7 +332,7 @@ def bulkfixcreationdates(dir):
     totaltime = round(totaltime)
     print ('\nFinished in ' + str(totaltime) + ' seconds')
 
-
 # bulkfixcreationdates (r'G:\Nextcloud\Pictures\James')
+
 
 print ('All done!')
