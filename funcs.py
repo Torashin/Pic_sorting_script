@@ -310,7 +310,7 @@ def bulkprocess(dir, dest):
     with concurrent.futures.ThreadPoolExecutor(48) as executor:
         _ = [executor.submit(processfile, file, dir, dest) for file in listoffiles]
     t1 = time.time()
-    totaltime = t 1 -t0
+    totaltime = t1-t0
     totaltime = round(totaltime)
     print ('\nFinished in ' + str(totaltime) + ' seconds')
 
@@ -366,7 +366,7 @@ def processfile(file, dir, dest):
 
 # processfile (r'D:\Pictures in work\Family Pics\Name is a date\2002-08-16\james passport.jpg', r'D:\Pictures in work\Family Pics\Name is a date 2')
 
-# bulkprocess (r'D:\Pic sorting script\Source', r'D:\Pic sorting script\Dest')
+bulkprocess (r'C:\Users\james\PycharmProjects\Source', r'C:\Users\james\PycharmProjects\Dest')
 
 
 def fixcreationdate(file):
@@ -400,7 +400,7 @@ def bulkfixcreationdates(dir):
     with concurrent.futures.ThreadPoolExecutor(48) as executor:
         _ = [executor.submit(fixcreationdate, file) for file in listoffiles]
     t1 = time.time()
-    totaltime = t 1 -t0
+    totaltime = t1 -t0
     totaltime = round(totaltime)
     print ('\nFinished in ' + str(totaltime) + ' seconds')
 
