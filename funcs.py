@@ -169,8 +169,8 @@ def parentdirname(pathstr, levels=1):
 def analysedate(date_input):
     # checks if string is a date and if so returns it in standard format
     try:
-        out_check_a = parse(date_input, default=datetime(2000, 1, 15))
-        out_check_b = parse(date_input, default=datetime(2001, 2, 2))
+        out_check_a = parse(date_input, default=datetime(2000, 1, 15), fuzzy=True)     # try datefinder package if parser struggles
+        out_check_b = parse(date_input, default=datetime(2001, 2, 2), fuzzy=True)
         if (out_check_a.year != out_check_b.year) or (out_check_a.month != out_check_b.month):
             return False
         else:
