@@ -9,8 +9,8 @@ import pathlib
 import concurrent.futures
 
 
-defaultsourcedir = r'C:\Users\james\PycharmProjects\Source'
-defaultdestdir = r'C:\Users\james\PycharmProjects\Dest'
+defaultsourcedir = r'D:\Pic sorting script\Source'
+defaultdestdir = r'D:\Pic sorting script\Dest'
 
 
 print ('###############START###############')
@@ -22,7 +22,7 @@ def printmetadata(files):
         metadata = et.get_metadata(files)
         print(metadata)
 
-# printmetadata(r'C:\Users\james\PycharmProjects\Source\2002-09\2002-09-19 18-38-34 - Dimage 2300.JPG')
+# printmetadata(r'D:\Pic sorting script\Source\IMG_5383.JPG')
 
 def checkslash(strng):
     z = strng[-1]
@@ -114,16 +114,16 @@ def getmdate(path):
 
 def gettdate(file):
     # get date taken from metadata
-    with exiftool.ExifTool() as et:
+    with exiftool.ExifToolHelper() as et:
         try:
-            tagdata = et.get_tag("DateTimeOriginal", file)
+            tagdata = et.get_tags(file, "DateTimeOriginal")
+            tagdata = tagdata[0]['EXIF:DateTimeOriginal']
         except:
             try:
-                tagdata = et.get_tag("QuickTime:MediaCreateDate", file)
+                tagdata = et.get_tags(file, "MediaCreateDate")
+                tagdata = tagdata[0]['QuickTime:MediaCreateDate']
             except:
                 tagdata = False
-        # if tagdata is None:
-        # tagdata = et.get_tag("QuickTime:MediaCreateDate", file)
         if tagdata is not False:
             tagdata = tagdata.replace(":", "-")
         # else:
@@ -133,8 +133,9 @@ def gettdate(file):
 
 def getcameramodel(file):
     # get camera model from metadata
-    with exiftool.ExifTool() as et:
-        tagdata = et.get_tag("Model", file)
+    with exiftool.ExifToolHelper() as et:
+        tagdata = et.get_tags(file, "Model")
+        tagdata = tagdata[0]['EXIF:Model']
         return tagdata
 
 
@@ -143,7 +144,7 @@ def setcdate(file, newcdate):
     filebytes = file.encode('utf_8')
     newcdate = newcdate.replace("-", ":")
     etcommand = b"-FileCreateDate=" + newcdate.encode('utf_8')
-    with exiftool.ExifTool() as et:
+    with exiftool.ExifToolHelper() as et:
         et.execute(etcommand, filebytes)
 
 
@@ -268,10 +269,10 @@ def processfile(file, dir, dest):
             newfilepath = checkslash(dest) + problempath + '/' + newfilename
         else:
             newfoldername = decideddate[:7] + '/'
-            try:
-                newfilename = decideddate + " - " + cameramodel
-            except:
+            if cameramodel == '':
                 newfilename = decideddate
+            else:
+                newfilename = decideddate + " - " + cameramodel
             newfilepath = checkslash(dest) + newfoldername + newfilename
         finalfilepath = movefile(file, newfilepath)
         if change_creation_date == True:
