@@ -245,10 +245,13 @@ def get_metadata(files):
 
 
 def get_media_type(path):
-    kind = filetype.guess(path)
-    mime = kind.mime
-    media_type = mime.split('/')[0]
-    return media_type
+    try:
+        kind = filetype.guess(path)
+        mime = kind.mime
+        media_type = mime.split('/')[0]
+        return media_type
+    except:
+        return None
 
 
 def case_insensitive_exists(path):
@@ -384,9 +387,9 @@ def get_list_of_files(directory):
     return allFiles
 
 
-def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata):
+def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_use_folderdate):
     if fileobj.folder_date == False:
-        if need_folderdate_match:
+        if need_folderdate_match or only_use_folderdate:
             print('Failed to get folder date for ' + fileobj.abs_path + ', - not allowed to proceed (need_folderdate_match=True)')
             return False
         elif fileobj.meta_date:
@@ -404,6 +407,8 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata):
         else:
             print ('Failed to get folder date and metadata date for ' + fileobj.abs_path)
             return False
+    elif only_use_folderdate:
+        return  fileobj.folder_date
     elif filedate_beats_metadadata:
         if abs(daysbetween(fileobj.updated_creation_date, fileobj.folder_date)) < 60:
             print('Using file date for ' + fileobj.abs_path + ', which matches folder date')
@@ -438,7 +443,7 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata):
             return False
 
 
-def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False):
+def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, only_use_folderdate = False):
     print ('Processing ' + filepath)
     #supported_extensions = ('.pdf', '.cr2', '.mov', '.png', '.jpg', '.jpeg','.mpg', '.3gp', '.bmp', '.avi', '.wmv', '.xmp', '.mdi', '.tif', '.psf', '.xlsx', '.zip', '.doc', '.gif', '.pps', '.mpe', '.flv', '.asf', '.xls', '.psd', '.m2ts', '.heic', '.mp4', '.m4v')
     supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
@@ -453,7 +458,7 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
         else:
             change_creation_date = False
             fileobj.updated_creation_date = fileobj.creation_date
-        fileobj.decided_date = datelogic(fileobj, need_folderdate_match, filedate_beats_metadadate)
+        fileobj.decided_date = datelogic(fileobj, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate)
         if fileobj.decided_date == False:
             print ('Couldn\'t sort ' + filepath + ' due to failing to get an accurate date')
             fileobj.problem_path = '/Couldn\'t Sort/'
@@ -478,17 +483,19 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
             if finalfilepath is not False:
                 set_creation_date(finalfilepath, fileobj.updated_creation_date)
                 # Update files_processed count with lock
-    gui_obj.files_processed += 1
-    gui_obj.update_status() # Update status after processing each file
+    if gui_obj:
+        gui_obj.files_processed += 1
+        gui_obj.update_status() # Update status after processing each file
     #print ('Finished moving file to ' + newfilepath)
 
 
-def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False):
+def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, only_use_folderdate = False):
     t0 = time.time()
     listoffiles = get_list_of_files(source_dir)
-    gui_obj.total_files = len(listoffiles)
+    if gui_obj:
+        gui_obj.total_files = len(listoffiles)
     with concurrent.futures.ThreadPoolExecutor(16) as executor:
-        _ = [executor.submit(processfile, filepath, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate) for filepath in listoffiles]
+        _ = [executor.submit(processfile, filepath, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate) for filepath in listoffiles]
     t1 = time.time()
     totaltime = t1-t0
     totaltime = round(totaltime)
@@ -516,6 +523,7 @@ def bulkfixcreationdates(dir):
     totaltime = t1 -t0
     totaltime = round(totaltime)
     print ('\nFinished in ' + str(totaltime) + ' seconds')
+
 
 #######################################################################################################################
 
@@ -634,15 +642,18 @@ def compare_exif(var1, var2, filetype, getmeta=True):
 
 
 def imgcomp(path1, path2, hash1=None, hash2=None):
-    if hash1 is None:
-        image1 = Image.open(path1)
-        hash1 = imagehash.average_hash(image1)
-    if hash2 is None:
-        image2 = Image.open(path2)
-        hash2 = imagehash.average_hash(image2)
-    similarity = 1.0 - (hash1 - hash2) / len(hash1.hash) ** 2
-    #print(f"Similarity between the images: {similarity:.1%}")
-    return similarity
+    try:
+        if hash1 is None:
+            image1 = Image.open(path1)
+            hash1 = imagehash.average_hash(image1)
+        if hash2 is None:
+            image2 = Image.open(path2)
+            hash2 = imagehash.average_hash(image2)
+        similarity = 1.0 - (hash1 - hash2) / len(hash1.hash) ** 2
+        #print(f"Similarity between the images: {similarity:.1%}")
+        return similarity
+    except:
+        return 0
 
 
 def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
@@ -729,9 +740,13 @@ def update_filenames(file_paths):
 
 def are_meta_duplicates(path1, path2):
     filetype = get_media_type(path1)
+    if not filetype:
+        return False
     meta_comp_result = compare_exif(path1, path2, filetype, getmeta=True)  # Compare metadata
     if meta_comp_result in ['same']:
         return True
+    elif meta_comp_result in ['all missing']:
+        return 'try hash'
     else:
         return False
 
@@ -745,7 +760,12 @@ def are_hash_duplicates(path1, path2, SIMILARITY_THRESHOLD=0.99):
 
 def are_duplicates_OS_dependent(path1, path2):
     if platform.system() == "Windows":
-        return are_meta_duplicates(path1, path2)
+        result = are_meta_duplicates(path1, path2)
+        if result in ['try hash']:
+            print('Trying hash dupliate comparison instead')
+            return are_hash_duplicates(path1, path2)
+        else:
+            return result
     else:
         return are_hash_duplicates(path1, path2)
 
@@ -807,46 +827,14 @@ def is_numeric(input_str):
         return False
 
 
-def copy_to_date_dir_format(directory, destination):
-    not_renamed_dir = os.path.join(destination, 'Not_renamed')
-    for root, dirs, files in os.walk(directory):
-        for folder in dirs:
-            folder_path = os.path.join(root, folder)
-            relative_path = os.path.relpath(folder_path, directory)
-            new_name = analyse_date(folder)
-            if new_name:
-                new_name = new_name[:7]  # Extract YYYY-MM
-                new_folder_path = os.path.join(destination, new_name)
-                # Create a new folder if it doesn't exist
-                pathlib.Path(new_folder_path).mkdir(parents=True, exist_ok=True)
-                print(f"Created folder: {new_name}")
-                # Copy contents of the folder to the new location
-                for item in os.listdir(folder_path):
-                    item_path = os.path.join(folder_path, item)
-                    if os.path.isfile(item_path):
-                        # Define fileobj using the fileobject class
-                        fileobj = fileobject(item_path, folder_path)
-                        # Modify new_abs_path according to the new destination
-                        fileobj.dest_dir = new_folder_path
-                        fileobj.new_rel_dir = fileobj.rel_dir + '/'
-                        fileobj.new_basename = fileobj.basename
-                        # Call copyfile function
-                        copyfile(fileobj)
-            else:
-                # If folder name cannot be interpreted as a date, copy the entire folder structure
-                destination_folder = os.path.join(not_renamed_dir, relative_path)
-                pathlib.Path(destination_folder).mkdir(parents=True, exist_ok=True)
-                print(f"Created folder: {destination_folder}")
-                # Copy the entire folder structure
-                shutil.copytree(folder_path, os.path.join(destination_folder, folder))
-
+def copy_to_date_dir_format(source_dir, destination):
+    bulkprocess(source_dir, destination, only_use_folderdate=True)
 
 
 if __name__ == "__main__":
     print('###############START###############')
     print('\n')
     #Test things#
-    copy_to_date_dir_format(r'C:\Users\james\Desktop\test', r'C:\Users\james\Desktop\dest')
     print('All done!')
 
 
