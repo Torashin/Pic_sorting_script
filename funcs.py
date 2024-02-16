@@ -356,7 +356,7 @@ def parentdirname(pathstr, levels=1):
 
 
 def analyse_date(date_input):
-     # checks if string is a date and if so returns it in standard format
+    # checks if string is a date and if so returns it in standard format
     try:
         # noinspection PyTypeChecker
         date_as_list = list(datefinder.find_dates(date_input, base_date=datetime(2000, 1, 15)))
@@ -367,7 +367,7 @@ def analyse_date(date_input):
         # noinspection PyTypeChecker
         out_check_b = list(datefinder.find_dates(date_input, base_date=datetime(2001, 2, 2)))[0]
         if (out_check_a.year != out_check_b.year) or (out_check_a.month != out_check_b.month):
-             return False
+            return False
         else:
             datewrongformat = str(out_check_a)
             daterightformat = datewrongformat.replace(":", "-")
@@ -807,10 +807,46 @@ def is_numeric(input_str):
         return False
 
 
+def copy_to_date_dir_format(directory, destination):
+    not_renamed_dir = os.path.join(destination, 'Not_renamed')
+    for root, dirs, files in os.walk(directory):
+        for folder in dirs:
+            folder_path = os.path.join(root, folder)
+            relative_path = os.path.relpath(folder_path, directory)
+            new_name = analyse_date(folder)
+            if new_name:
+                new_name = new_name[:7]  # Extract YYYY-MM
+                new_folder_path = os.path.join(destination, new_name)
+                # Create a new folder if it doesn't exist
+                pathlib.Path(new_folder_path).mkdir(parents=True, exist_ok=True)
+                print(f"Created folder: {new_name}")
+                # Copy contents of the folder to the new location
+                for item in os.listdir(folder_path):
+                    item_path = os.path.join(folder_path, item)
+                    if os.path.isfile(item_path):
+                        # Define fileobj using the fileobject class
+                        fileobj = fileobject(item_path, folder_path)
+                        # Modify new_abs_path according to the new destination
+                        fileobj.dest_dir = new_folder_path
+                        fileobj.new_rel_dir = fileobj.rel_dir + '/'
+                        fileobj.new_basename = fileobj.basename
+                        # Call copyfile function
+                        copyfile(fileobj)
+            else:
+                # If folder name cannot be interpreted as a date, copy the entire folder structure
+                destination_folder = os.path.join(not_renamed_dir, relative_path)
+                pathlib.Path(destination_folder).mkdir(parents=True, exist_ok=True)
+                print(f"Created folder: {destination_folder}")
+                # Copy the entire folder structure
+                shutil.copytree(folder_path, os.path.join(destination_folder, folder))
+
+
+
 if __name__ == "__main__":
     print('###############START###############')
     print('\n')
     #Test things#
+    copy_to_date_dir_format(r'C:\Users\james\Desktop\test', r'C:\Users\james\Desktop\dest')
     print('All done!')
 
 
