@@ -71,6 +71,7 @@ class fileobject:
         self.dest_dir = None
         self.new_rel_dir = None
         self.problem_path = '/'
+        self.set_creationdate_to_decideddate = False
 
     @property
     def rel_dir(self):
@@ -166,6 +167,8 @@ class fileobject:
                 else:
                     print('Unsupported file format for this OS')
             tagdata = tagdata.replace(":", "-")
+            if tagdata == '0000-00-00 00-00-00':
+                return False
             self._meta_date = tagdata
         return self._meta_date
 
@@ -381,6 +384,7 @@ def analyse_date(date_input):
 
 def get_list_of_files(directory):
     allFiles = list()
+    allFiles = list()
     for dirpath ,_ ,filenames in os.walk(directory):
         for f in filenames:
             allFiles.append(os.path.abspath(os.path.join(dirpath, f)))
@@ -459,6 +463,8 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
             change_creation_date = False
             fileobj.updated_creation_date = fileobj.creation_date
         fileobj.decided_date = datelogic(fileobj, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate)
+        if fileobj.set_creationdate_to_decideddate:
+            fileobj.updated_creation_date = fileobj.decided_date
         if fileobj.decided_date == False:
             print ('Couldn\'t sort ' + filepath + ' due to failing to get an accurate date')
             fileobj.problem_path = '/Couldn\'t Sort/'
@@ -746,7 +752,7 @@ def are_meta_duplicates(path1, path2):
     if meta_comp_result in ['same']:
         return True
     elif meta_comp_result in ['all missing']:
-        return 'try hash'
+        return 'unknown'
     else:
         return False
 
@@ -761,7 +767,7 @@ def are_hash_duplicates(path1, path2, SIMILARITY_THRESHOLD=0.99):
 def are_duplicates_OS_dependent(path1, path2):
     if platform.system() == "Windows":
         result = are_meta_duplicates(path1, path2)
-        if result in ['try hash']:
+        if result in ['unknown']:
             print('Trying hash dupliate comparison instead')
             return are_hash_duplicates(path1, path2)
         else:
