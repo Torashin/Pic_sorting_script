@@ -837,7 +837,7 @@ def copy_to_date_dir_format(source_dir, destination):
     bulkprocess(source_dir, destination, only_use_folderdate=True)
 
 
-def move_if_missing_exifdata(filepath, source_dir, dest_dir):
+def sort_by_exif_quality(filepath, source_dir, dest_dir):
     print ('Processing ' + filepath)
     supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
     fileobj = fileobject(filepath, source_dir)
@@ -863,23 +863,29 @@ def move_if_missing_exifdata(filepath, source_dir, dest_dir):
             print("Missing all metadata keys.")
             fileobj.dest_dir = dest_dir + '/Missing_all_meta/'
             fileobj.new_rel_dir = fileobj.rel_dir + '/'
-            finalfilepath = movefile(fileobj)
+            finalfilepath = copyfile(fileobj)
+            if finalfilepath is not False:
+                set_creation_date(finalfilepath, fileobj.creation_date)
         elif len(missing_keys) == 0:
             print("Has all metadata keys.")
             fileobj.dest_dir = dest_dir + '/Full_metadata/'
             fileobj.new_rel_dir = fileobj.rel_dir + '/'
-            finalfilepath = movefile(fileobj)
+            finalfilepath = copyfile(fileobj)
+            if finalfilepath is not False:
+                set_creation_date(finalfilepath, fileobj.creation_date)
         else:
             print(f"Missing {len(missing_keys)} metadata keys: {missing_keys}")
             fileobj.dest_dir = dest_dir + '/Missing_some_meta/'
             fileobj.new_rel_dir = fileobj.rel_dir + '/'
-            finalfilepath = movefile(fileobj)
+            finalfilepath = copyfile(fileobj)
+            if finalfilepath is not False:
+                set_creation_date(finalfilepath, fileobj.creation_date)
 
-def bulkprocess_move_if_missing_exif(source_dir, dest):
+def bulkprocess_sort_by_exif_quality(source_dir, dest):
     t0 = time.time()
     listoffiles = get_list_of_files(source_dir)
     with concurrent.futures.ThreadPoolExecutor(16) as executor:
-        _ = [executor.submit(move_if_missing_exifdata, filepath, source_dir, dest) for filepath in listoffiles]
+        _ = [executor.submit(sort_by_exif_quality, filepath, source_dir, dest) for filepath in listoffiles]
     t1 = time.time()
     totaltime = t1-t0
     totaltime = round(totaltime)
