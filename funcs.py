@@ -551,7 +551,7 @@ IMG_META_TAGS = [
     'EXIF:DateTimeOriginal',
     'EXIF:ExposureTime',
     'EXIF:FNumber',
-    'EXIF:ISOSpeedRatings',
+    'EXIF:ISO',
     'EXIF:FocalLength',
     'EXIF:GPSLatitude',
     'EXIF:GPSLongitude'
@@ -835,6 +835,55 @@ def is_numeric(input_str):
 
 def copy_to_date_dir_format(source_dir, destination):
     bulkprocess(source_dir, destination, only_use_folderdate=True)
+
+
+def move_if_missing_exifdata(filepath, source_dir, dest_dir):
+    print ('Processing ' + filepath)
+    supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
+    fileobj = fileobject(filepath, source_dir)
+    fileobj.new_basename = fileobj.basename
+    if fileobj.extension not in supported_extensions:
+        print(filepath + ' does not have an accepted extension; `skipping...')
+    else:
+        filetype = get_media_type(filepath)
+        all_meta = get_metadata([filepath])[0]
+        if filetype == 'image':
+            meta_tags = IMG_META_TAGS
+        elif filetype == 'video':
+            meta_tags = VID_META_TAGS
+        else:
+            print(f'File {filepath} is not an image or a video - can not get metadata')
+            meta_tags = []
+        missing_keys = set()
+        for key in meta_tags:  # Use the central list of relevant metadata
+            value = all_meta.get(key)
+            if value is None:
+                missing_keys.add(key)
+        if len(missing_keys) == len(meta_tags):
+            print("Missing all metadata keys.")
+            fileobj.dest_dir = dest_dir + '/Missing_all_meta/'
+            fileobj.new_rel_dir = fileobj.rel_dir + '/'
+            finalfilepath = movefile(fileobj)
+        elif len(missing_keys) == 0:
+            print("Has all metadata keys.")
+            fileobj.dest_dir = dest_dir + '/Full_metadata/'
+            fileobj.new_rel_dir = fileobj.rel_dir + '/'
+            finalfilepath = movefile(fileobj)
+        else:
+            print(f"Missing {len(missing_keys)} metadata keys: {missing_keys}")
+            fileobj.dest_dir = dest_dir + '/Missing_some_meta/'
+            fileobj.new_rel_dir = fileobj.rel_dir + '/'
+            finalfilepath = movefile(fileobj)
+
+def bulkprocess_move_if_missing_exif(source_dir, dest):
+    t0 = time.time()
+    listoffiles = get_list_of_files(source_dir)
+    with concurrent.futures.ThreadPoolExecutor(16) as executor:
+        _ = [executor.submit(move_if_missing_exifdata, filepath, source_dir, dest) for filepath in listoffiles]
+    t1 = time.time()
+    totaltime = t1-t0
+    totaltime = round(totaltime)
+    print ('\nFinished in ' + str(totaltime) + ' seconds')
 
 
 if __name__ == "__main__":
