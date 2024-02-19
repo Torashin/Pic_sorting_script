@@ -61,6 +61,9 @@ class PicSortingScriptGUI:
                 [sg.Text('Require folder date match:')],
                 [sg.Radio('No', 'need_folderdate', key='-folderdate_false-', default=True),
                  sg.Radio('Yes', 'need_folderdate', key='-folderdate_true-')],
+                [sg.Text('Update metadata date?')],
+                [sg.Radio('No', 'update_meta_date', key='-update_meta_date_false-', default=True),
+                 sg.Radio('Yes', 'update_meta_date', key='-update_meta_date_true-')],
             ], pad=(5, (15, 5)))],
             [sg.Push(), sg.Button('Go!', key='-go-', size=(10, 1), pad=((5, 5), (20, 15)))],
         ]
@@ -100,6 +103,7 @@ class PicSortingScriptGUI:
                 rename_files = True if values['-generate-'] else False
                 filedate_beats_metadadate = False if values['-filedate-'] else False
                 need_folderdate_match = True if values['-folderdate_true-'] else False
+                update_meta_date = True if values['-update_meta_date_true-'] else False
 
                 # Update status bar
                 self.total_files = 0  # Set the total number of files (replace with actual count)
@@ -110,7 +114,7 @@ class PicSortingScriptGUI:
                 async_func = threading.Thread(
                     target=pssfuncs.bulkprocess,
                     args=(sourcedir, destdir, self, rename_files, move_files, need_folderdate_match,
-                          filedate_beats_metadadate)
+                          filedate_beats_metadadate, update_meta_date)
                 )
                 async_func.start()
 

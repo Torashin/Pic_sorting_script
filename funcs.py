@@ -36,9 +36,24 @@ import datefinder
 #logging.basicConfig(level=logging.DEBUG)  # Set the logging level according to your preference
 
 if platform.system() == "Windows":
-    import exiftool                     # Install PyExifTool
+    import exiftool
     exiftool_path = os.path.abspath("exiftool.exe")
     os.environ['EXIFTOOL_PATH'] = exiftool_path
+    exiftool_supported = True
+#elif platform.system() == "Darwin":  # macOS
+    #import exiftool
+    #exiftool_path = os.path.abspath("exiftool")
+    #os.environ['EXIFTOOL_PATH'] = exiftool_path    #This doesn't seem to work
+    #Exitool needs to be installed separately (for now)
+else:
+    try:
+        import exiftool
+        with exiftool.ExifToolHelper() as et:
+            version = et.execute("-ver")
+            exiftool_supported = True
+    except Exception as e:
+        exiftool_supported = False
+        print('Please install exiftool for full compatibility')
 
 
 defaultsourcedir = '~/Desktop/test'
@@ -136,7 +151,7 @@ class fileobject:
     def meta_date(self):
         if self._meta_date is None:
             # get date taken from metadata
-            if platform.system() == "Windows":
+            if exiftool_supported:
                 try:
                     with exiftool.ExifToolHelper() as et:
                         try:
@@ -176,7 +191,7 @@ class fileobject:
     def camera_model(self):
         if self._camera_model is None:
             # get camera model from metadata
-            if platform.system() == "Windows":
+            if exiftool_supported:
                 try:
                     with exiftool.ExifToolHelper() as et:
                         tagdata = et.get_tags(self.abs_path, "Model")
@@ -217,7 +232,7 @@ class fileobject:
 
 def get_metadata(files):
     metadata = []
-    if platform.system() == "Windows":
+    if exiftool_supported:
         try:
             with exiftool.ExifToolHelper() as et:
                 metadata = et.get_metadata(files)
@@ -447,7 +462,7 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_us
             return False
 
 
-def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, only_use_folderdate = False):
+def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_meta_date=False, only_use_folderdate = False):
     print ('Processing ' + filepath)
     #supported_extensions = ('.pdf', '.cr2', '.mov', '.png', '.jpg', '.jpeg','.mpg', '.3gp', '.bmp', '.avi', '.wmv', '.xmp', '.mdi', '.tif', '.psf', '.xlsx', '.zip', '.doc', '.gif', '.pps', '.mpe', '.flv', '.asf', '.xls', '.psd', '.m2ts', '.heic', '.mp4', '.m4v')
     supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
@@ -463,14 +478,16 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
             change_creation_date = False
             fileobj.updated_creation_date = fileobj.creation_date
         fileobj.decided_date = datelogic(fileobj, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate)
-        if fileobj.set_creationdate_to_decideddate:
-            fileobj.updated_creation_date = fileobj.decided_date
         if fileobj.decided_date == False:
             print ('Couldn\'t sort ' + filepath + ' due to failing to get an accurate date')
             fileobj.problem_path = '/Couldn\'t Sort/'
             fileobj.new_basename = fileobj.basename
             fileobj.new_rel_dir = fileobj.rel_dir + '/'
         else:
+            if fileobj.set_creationdate_to_decideddate and fileobj.meta_date != fileobj.decided_date:
+                fileobj.updated_creation_date = fileobj.decided_date
+            if update_meta_date:
+                update_file_meta_date(fileobj)
             fileobj.new_rel_dir = fileobj.decided_date[:7] + '/'
             if rename:
                 if fileobj.camera_model == '':
@@ -495,13 +512,13 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
     #print ('Finished moving file to ' + newfilepath)
 
 
-def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, only_use_folderdate = False):
+def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_meta_date=False, only_use_folderdate=False):
     t0 = time.time()
     listoffiles = get_list_of_files(source_dir)
     if gui_obj:
         gui_obj.total_files = len(listoffiles)
     with concurrent.futures.ThreadPoolExecutor(16) as executor:
-        _ = [executor.submit(processfile, filepath, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate) for filepath in listoffiles]
+        _ = [executor.submit(processfile, filepath, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, update_meta_date, only_use_folderdate) for filepath in listoffiles]
     t1 = time.time()
     totaltime = t1-t0
     totaltime = round(totaltime)
@@ -765,7 +782,7 @@ def are_hash_duplicates(path1, path2, SIMILARITY_THRESHOLD=0.99):
 
 
 def are_duplicates_OS_dependent(path1, path2):
-    if platform.system() == "Windows":
+    if exiftool_supported:
         result = are_meta_duplicates(path1, path2)
         if result in ['unknown']:
             print('Trying hash dupliate comparison instead')
@@ -891,11 +908,29 @@ def bulkprocess_sort_by_exif_quality(source_dir, dest):
     totaltime = round(totaltime)
     print ('\nFinished in ' + str(totaltime) + ' seconds')
 
+def edit_metadata(image_path, tag, new_value):
+    if exiftool_supported:
+        with exiftool.ExifToolHelper() as et:
+            metadata = {tag: new_value}
+            et.execute(*[f"-{k}={v}" for k, v in metadata.items()], image_path)
+    else:
+        print('Exiftool needs to be installed to do that')
+
+def update_file_meta_date(fileobj):
+    new_date = fileobj.decided_date.replace("-", ":")
+    if fileobj.media_type == 'image':
+        edit_metadata(fileobj.abs_path, 'DateTimeOriginal', new_date)
+    elif fileobj.media_type == 'video':
+        edit_metadata(fileobj.abs_path, 'MediaCreateDate', new_date)
+    else:
+        print('Can\'t change exif date')
+
 
 if __name__ == "__main__":
     print('###############START###############')
     print('\n')
     #Test things#
+
     print('All done!')
 
 
