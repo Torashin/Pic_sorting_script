@@ -58,9 +58,12 @@ class PicSortingScriptGUI:
                 [sg.Text('File date priority:')],
                 [sg.Radio('Prioritise metadata date', 'file_date_priority', key='-metadate-', default=True),
                  sg.Radio('Prioritise file date', 'file_date_priority', key='-filedate-')],
-                [sg.Text('Require folder date match:')],
+                [sg.Text('Require folder date match?')],
                 [sg.Radio('No', 'need_folderdate', key='-folderdate_false-', default=True),
                  sg.Radio('Yes', 'need_folderdate', key='-folderdate_true-')],
+                [sg.Text('Update file creation date?')],
+                [sg.Radio('No', 'update_file_date', key='-update_file_date_false-', default=True),
+                 sg.Radio('Yes', 'update_file_date', key='-update_file_date_true-')],
                 [sg.Text('Update metadata date?')],
                 [sg.Radio('No', 'update_meta_date', key='-update_meta_date_false-', default=True),
                  sg.Radio('Yes', 'update_meta_date', key='-update_meta_date_true-')],
@@ -103,6 +106,7 @@ class PicSortingScriptGUI:
                 rename_files = True if values['-generate-'] else False
                 filedate_beats_metadadate = False if values['-filedate-'] else False
                 need_folderdate_match = True if values['-folderdate_true-'] else False
+                update_file_date = True if values['-update_file_date_true-'] else False
                 update_meta_date = True if values['-update_meta_date_true-'] else False
 
                 # Update status bar
@@ -114,7 +118,7 @@ class PicSortingScriptGUI:
                 async_func = threading.Thread(
                     target=pssfuncs.bulkprocess,
                     args=(sourcedir, destdir, self, rename_files, move_files, need_folderdate_match,
-                          filedate_beats_metadadate, update_meta_date)
+                          filedate_beats_metadadate,update_file_date, update_meta_date)
                 )
                 async_func.start()
 
