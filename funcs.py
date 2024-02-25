@@ -248,7 +248,7 @@ class FileObject:
     @property
     def metadata(self):
         if self._metadata is None:
-            self._metadata = get_metadata(self.abs_path)
+            self._metadata = get_metadata(self.abs_path)[0]
         return self._metadata
 
     @property
@@ -547,10 +547,10 @@ def processfile(abs_path, source_dir, dest_dir, gui_obj=None, rename=False, move
             finalfilepath = copyfile(fileobj)
             if finalfilepath is not False:
                 set_creation_date(finalfilepath, fileobj.updated_creation_date)
-                # Update files_processed count with lock
     if gui_obj:
-        with gui_obj.files_processed_lock:
-            gui_obj.files_processed += 1
+        if finalfilepath:
+            with gui_obj.files_processed_lock:
+                gui_obj.files_processed += 1
     #print ('Finished moving file to ' + newfilepath)
 
 
@@ -672,8 +672,11 @@ def compare_exif(fileobj1, fileobj2, filetype):
         meta_tags = []
     missing_keys = set()
     for key in meta_tags:  # Use the central list of relevant metadata
-        value1 = metadata1.get(key)
-        value2 = metadata2.get(key)
+        try:
+            value1 = metadata1.get(key)
+            value2 = metadata2.get(key)
+        except Exception as e:
+                print(f"An error occurred: {e}")
         if value1 is None and value2 is None:
             missing_keys.add(key)
         elif value1 is None or value2 is None:
@@ -780,7 +783,7 @@ def are_hash_duplicates(fileobj1, fileobj2, SIMILARITY_THRESHOLD=0.99):
 
 def are_duplicates_OS_dependent(path1, path2):
     if exiftool_supported:
-        result = are_meta_duplicates(path1, path2)
+        result = are_meta_duplicates(filemanager.get_file(path1), filemanager.get_file(path2))
         if result in ['unknown']:
             print('Trying hash dupliate comparison instead')
             return are_hash_duplicates(path1, path2)

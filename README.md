@@ -1,7 +1,5 @@
 # Pic Sorting Script
 
-Currently broken - should be fixed soon!
-
 ## Overview 
 This project started as a personal endeavor to organize my photo and home video libraries. Over time, it grew to become
 a fairly capable tool for sorting and managing media files. Recognizing its potential usefulness to others, I've
