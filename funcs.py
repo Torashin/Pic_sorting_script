@@ -64,11 +64,25 @@ defaultsourcedir = os.path.expanduser(defaultsourcedir)
 defaultdestdir = os.path.expanduser(defaultdestdir)
 
 
-class fileobject:
-    def __init__(self, path, source_dir, is_in_dest=False):
+class FileManager:
+    def __init__(self):
+        self.file_objects_dict = {}
+
+    def add_file(self, abs_path, source_dir=None, is_in_dest=False):
+        if abs_path not in self.file_objects_dict:
+            self.file_objects_dict[abs_path] = FileObject(abs_path, source_dir, is_in_dest)
+
+    def get_file(self, abs_path, source_dir=None, is_in_dest=False):
+        if abs_path not in self.file_objects_dict:
+            print(f"Creating FileObject for {abs_path}")
+            self.add_file(abs_path, source_dir, is_in_dest)
+        return self.file_objects_dict.get(abs_path)
+
+class FileObject:
+    def __init__(self, abs_path, source_dir=None, is_in_dest=False):
         self.source_dir = source_dir
-        self.abs_path = path
-        self.abs_dir, self.filename = os.path.split(path)
+        self.abs_path = abs_path
+        self.abs_dir, self.filename = os.path.split(abs_path)
         self.basename, extension = os.path.splitext(self.filename)
         self.extension = extension.lower()
         self._rel_dir = None
@@ -84,11 +98,15 @@ class fileobject:
         self.decided_date = None
         self.new_basename = None
         self.new_filename = None
-        self.dest_dir = None
         self.new_rel_dir = None
         self.problem_path = '/'
         self.update_meta_date = False
         self.is_in_dest = is_in_dest
+
+        if is_in_dest:
+            self.dest_dir = source_dir
+        else:
+            self.dest_dir = None
 
 
     @property
@@ -344,7 +362,7 @@ def movefile(fileobj, duplicate_check=True):
         pathlib.Path(fileobj.dest_dir + fileobj.problem_path + fileobj.new_rel_dir).mkdir(parents=True, exist_ok=True)
         existing_file_path = case_insensitive_exists(fileobj.new_abs_path)
         if existing_file_path:
-            if duplicate_check and fileobj.problem_path != '/Duplicates/' and are_duplicates_OS_dependent(fileobj, fileobject(existing_file_path, is_in_dest=True)):
+            if duplicate_check and fileobj.problem_path != '/Duplicates/' and are_duplicates_OS_dependent(fileobj, filemanager.get_file(existing_file_path, fileobj.dest_dir, is_in_dest=True)):
                 print(
                     f'{fileobj.abs_path} has been recognised as a duplicate of {existing_file_path}')
                 fileobj.problem_path = '/Duplicates/'
@@ -484,14 +502,17 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_us
             return False
 
 
-def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_file_date=False, update_meta_date=False, only_use_folderdate = False):
-    print ('Processing ' + filepath)
+filemanager = FileManager()
+
+
+def processfile(abs_path, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_file_date=False, update_meta_date=False, only_use_folderdate = False):
+    print ('Processing ' + abs_path)
     #supported_extensions = ('.pdf', '.cr2', '.mov', '.png', '.jpg', '.jpeg','.mpg', '.3gp', '.bmp', '.avi', '.wmv', '.xmp', '.mdi', '.tif', '.psf', '.xlsx', '.zip', '.doc', '.gif', '.pps', '.mpe', '.flv', '.asf', '.xls', '.psd', '.m2ts', '.heic', '.mp4', '.m4v')
     supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
-    fileobj = fileobject(filepath, source_dir)
+    fileobj = filemanager.get_file(abs_path, source_dir)
     fileobj.dest_dir = dest_dir
     if fileobj.extension not in supported_extensions:
-        print(filepath + ' does not have an accepted extension; `skipping...')
+        print(abs_path + ' does not have an accepted extension; `skipping...')
     else:
         if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0:
             change_creation_date = True
@@ -501,7 +522,7 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
             fileobj.updated_creation_date = fileobj.creation_date
         fileobj.decided_date = datelogic(fileobj, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate)
         if fileobj.decided_date == False:
-            print ('Couldn\'t sort ' + filepath + ' due to failing to get an accurate date')
+            print ('Couldn\'t sort ' + abs_path + ' due to failing to get an accurate date')
             fileobj.problem_path = '/Couldn\'t Sort/'
             fileobj.new_basename = fileobj.basename
             fileobj.new_rel_dir = fileobj.rel_dir + '/'
@@ -539,7 +560,7 @@ def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, n
     if gui_obj:
         gui_obj.total_files = len(listoffiles)
     with concurrent.futures.ThreadPoolExecutor(16) as executor:
-        _ = [executor.submit(processfile, filepath, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, update_file_date, update_meta_date, only_use_folderdate) for filepath in listoffiles]
+        _ = [executor.submit(processfile, abs_path, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, update_file_date, update_meta_date, only_use_folderdate) for abs_path in listoffiles]
     t1 = time.time()
     totaltime = t1-t0
     totaltime = round(totaltime)
@@ -548,7 +569,7 @@ def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, n
 
 def fixcreationdate(path, source_dir):
     print ('Processing ' + path)
-    fileobj = fileobject(path, source_dir)
+    fileobj = filemanager.get_file(path, source_dir)
     if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0:
         print ('Fixing creation date from ' + fileobj.creation_date + ' to ' + fileobj.modified_date)
         fileobj.updated_creation_date = fileobj.modified_date
@@ -628,7 +649,7 @@ def convert_heic_to_jpeg(orig_file_path, jpeg_path, quality=90):
     register_heif_opener()
     try:
         dir = os.path.split(orig_file_path)[0]
-        origfileobj = fileobject(orig_file_path, dir)
+        origfileobj = filemanager.get_file(orig_file_path, dir)
         img = Image.open(orig_file_path)
         icc_profile = img.info.get('icc_profile')
         exif_data = img.getexif()
@@ -688,7 +709,7 @@ def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
     all_metadata = get_metadata(file_list)
     for file_path, metadata in zip(file_list, all_metadata):
         relevant_metadata = {key: metadata.get(key) for key in IMG_META_TAGS}  # Use .get() method
-        image_files.append(fileobject(file_path))
+        image_files.append(filemanager.get_file(file_path))
     grouped_files = {}
     for image_file in image_files:
         added_to_group = False
@@ -797,32 +818,32 @@ def check_for_matching_jpeg(heic_path, existing_jpeg_names):    #check if jpeg w
     dir = os.path.dirname(heic_path)
     for jpeg_filename in existing_jpeg_names:
         jpeg_path = os.path.join(dir, jpeg_filename)
-        meta_comp_result = compare_exif(heic_path, jpeg_path, 'image')  # Compare metadata
+        meta_comp_result = compare_exif(heic_path, filemanager.get_file(jpeg_path,), 'image')  # Compare metadata
         if meta_comp_result in ['same']:
             print(f'A matching JPEG for {heic_path} already exists: {jpeg_filename}')
             return True
     return False
 
 
-def smart_heic_to_jpeg(heic_path, QUALITY=90):
+def smart_heic_to_jpeg(heic_path, source_dir, QUALITY=90):
     print(f'Smart conversion  of {heic_path}')
     if heic_path.lower().endswith('.heic'):
         dir = os.path.dirname(heic_path)
-        fileobj = fileobject(heic_path, dir, is_in_dest=True)
+        fileobj = filemanager.get_file(heic_path, source_dir, True)
         jpeg_path = os.path.splitext(heic_path)[0] + '.jpg'
         existing_jpeg_names = find_similar_fnames(jpeg_path)
         if existing_jpeg_names:
             print(f'There are already some jpegs similar to {heic_path}')
-            if not check_for_matching_jpeg(heic_path, existing_jpeg_names):  # if matching jpeg doesn't exist (using metadata)
+            if check_for_matching_jpeg(heic_path, existing_jpeg_names):  # if there's a matching jpeg (using metadata)
+                print(f'Found a jpeg match for {heic_path} with the same name. Skipping.')
+                return
+            else:
                 jpeg_name = os.path.basename(jpeg_path)
                 jpeg_name = generate_unique_filename(jpeg_name, existing_jpeg_names)
                 jpeg_path = os.path.join(dir, jpeg_name)
                 convert_heic_to_jpeg(heic_path, jpeg_path, QUALITY)
                 dupe_path_list = [os.path.join(dir, file) for file in existing_jpeg_names] + [jpeg_path]
-            else:
-                print(f'None of the jpegs similar to {heic_path} match. Deduping them.')
-                dupe_path_list = [os.path.join(dir, file) for file in existing_jpeg_names]
-            dedupe_image_files(dupe_path_list)
+            dedupe_image_files(dupe_path_list, source_dir)
         else:
             print(f'No existing jpegs similar to {heic_path}. Creating jpeg.')
             convert_heic_to_jpeg(heic_path, jpeg_path, QUALITY)
@@ -837,7 +858,7 @@ def bulk_convert_heic(dir_path, QUALITY=90):
             file_path = os.path.join(root, file_name)
             file_list.append(file_path)
     with concurrent.futures.ThreadPoolExecutor(12) as executor:
-        _ = [executor.submit(smart_heic_to_jpeg, filepath, QUALITY) for filepath in file_list]
+        _ = [executor.submit(smart_heic_to_jpeg, abs_path, dir_path, QUALITY) for abs_path in file_list]
     t1 = time.time()
     totaltime = t1 - t0
     totaltime = round(totaltime)
@@ -856,22 +877,22 @@ def copy_to_date_dir_format(source_dir, destination):
     bulkprocess(source_dir, destination, only_use_folderdate=True)
 
 
-def sort_by_exif_quality(filepath, source_dir, dest_dir):
-    print ('Processing ' + filepath)
+def sort_by_exif_quality(abs_path, source_dir, dest_dir):
+    print ('Processing ' + abs_path)
     supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
-    fileobj = fileobject(filepath, source_dir)
+    fileobj = filemanager.get_file(abs_path, source_dir)
     fileobj.new_basename = fileobj.basename
     if fileobj.extension not in supported_extensions:
-        print(filepath + ' does not have an accepted extension; `skipping...')
+        print(abs_path + ' does not have an accepted extension; `skipping...')
     else:
-        filetype = get_media_type(filepath)
-        all_meta = get_metadata([filepath])[0]
+        filetype = get_media_type(abs_path)
+        all_meta = get_metadata([abs_path])[0]
         if filetype == 'image':
             meta_tags = IMG_META_TAGS
         elif filetype == 'video':
             meta_tags = VID_META_TAGS
         else:
-            print(f'File {filepath} is not an image or a video - can not get metadata')
+            print(f'File {abs_path} is not an image or a video - can not get metadata')
             meta_tags = []
         missing_keys = set()
         for key in meta_tags:  # Use the central list of relevant metadata
@@ -904,7 +925,7 @@ def bulkprocess_sort_by_exif_quality(source_dir, dest):
     t0 = time.time()
     listoffiles = get_list_of_files(source_dir)
     with concurrent.futures.ThreadPoolExecutor(16) as executor:
-        _ = [executor.submit(sort_by_exif_quality, filepath, source_dir, dest) for filepath in listoffiles]
+        _ = [executor.submit(sort_by_exif_quality, abs_path, source_dir, dest) for abs_path in listoffiles]
     t1 = time.time()
     totaltime = t1-t0
     totaltime = round(totaltime)
