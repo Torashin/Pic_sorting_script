@@ -639,20 +639,15 @@ def convert_heic_to_jpeg(orig_file_path, jpeg_path, quality=90):
         raise RuntimeError(f'Conversion failed with error: {str(e)}')
 
 
-def compare_exif(var1, var2, filetype, getmeta=True):
-    if getmeta:
-        all_meta = get_metadata([var1, var2])  # Note: Use metadata instead of file paths
-        metadata1 = all_meta[0]
-        metadata2 = all_meta[1]
-    else:
-        metadata1 = var1
-        metadata2 = var2
+def compare_exif(fileobj1, fileobj2, filetype):
+    metadata1 = fileobj1.metadata
+    metadata2 = fileobj2.metadata
     if filetype == 'image':
         meta_tags = IMG_META_TAGS
     elif filetype == 'video':
         meta_tags = VID_META_TAGS
     else:
-        print(f'File {var1} is not an image or a video - can not get metadata')
+        print(f'File {fileobj1} is not an image or a video - can not get metadata')
         meta_tags = []
     missing_keys = set()
     for key in meta_tags:  # Use the central list of relevant metadata
@@ -679,15 +674,13 @@ def compare_exif(var1, var2, filetype, getmeta=True):
     return 'same'
 
 
-def imgcomp(path1, path2, hash1=None, hash2=None):
+def imgcomp(fileobj1, fileobj2):
     try:
-        if hash1 is None:
-            image1 = Image.open(path1)
-            hash1 = imagehash.average_hash(image1)
-        if hash2 is None:
-            image2 = Image.open(path2)
-            hash2 = imagehash.average_hash(image2)
-        similarity = 1.0 - (hash1 - hash2) / len(hash1.hash) ** 2
+        for file in (fileobj1, fileobj2):
+            if file.image_hash is None:
+                image = Image.open(file.abs_path)
+                file.image_hash = imagehash.average_hash(image)
+        similarity = 1.0 - (fileobj1.image_hash - fileobj2.image_hash) / len(fileobj1.image_hash.hash) ** 2
         #print(f"Similarity between the images: {similarity:.1%}")
         return similarity
     except:
@@ -774,11 +767,11 @@ def update_filenames(file_paths):
                 print(f"Renamed {old_path} to {new_path}")
 
 
-def are_meta_duplicates(path1, path2):
-    filetype = get_media_type(path1)
+def are_meta_duplicates(fileobj1, fileobj2):
+    filetype = get_media_type(fileobj1.abs_path)
     if not filetype:
         return False
-    meta_comp_result = compare_exif(path1, path2, filetype, getmeta=True)  # Compare metadata
+    meta_comp_result = compare_exif(fileobj1, fileobj2, filetype)  # Compare metadata
     if meta_comp_result in ['same']:
         return True
     elif meta_comp_result in ['all missing']:
@@ -787,8 +780,8 @@ def are_meta_duplicates(path1, path2):
         return False
 
 
-def are_hash_duplicates(path1, path2, SIMILARITY_THRESHOLD=0.99):
-    if imgcomp(path1, path2) >= SIMILARITY_THRESHOLD:
+def are_hash_duplicates(fileobj1, fileobj2, SIMILARITY_THRESHOLD=0.99):
+    if imgcomp(fileobj1, fileobj2) >= SIMILARITY_THRESHOLD:
         return True
     else:
         return False
