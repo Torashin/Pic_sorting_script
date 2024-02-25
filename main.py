@@ -28,7 +28,7 @@ class PicSortingScriptGUI:
         self.status = 'Not ready'
         self.total_files = 0
         self.files_processed = 0
-        self.status_lock = threading.Lock()
+        self.files_processed_lock = threading.Lock()
         self.window = self.create_window()
 
     @property
@@ -81,16 +81,15 @@ class PicSortingScriptGUI:
         return sg.Window('Pic Sorting Script', layout, finalize=True)
 
     def update_status(self, status_msg=None):
-        with self.status_lock:
-            if status_msg:
-                self.status = status_msg
-            elif self.total_files > 0:
-                self.status = f'Processed {self.files_processed} of {self.total_files} files ({self.percent_processed:.1f}% complete)'
-            else:
-                self.status = 'Ready'
-            if self.window:
-                self.window['-statusbar-'].update(f'Status: {self.status}', text_color=self.statusbar_color[1],
-                                                  background_color=self.statusbar_color[0])
+        if status_msg:
+            self.status = status_msg
+        elif self.total_files > 0:
+            self.status = f'Processed {self.files_processed} of {self.total_files} files ({self.percent_processed:.1f}% complete)'
+        else:
+            self.status = 'Ready'
+        if self.window:
+            self.window['-statusbar-'].update(f'Status: {self.status}', text_color=self.statusbar_color[1],
+                                              background_color=self.statusbar_color[0])
 
     def run(self):
         self.update_status()

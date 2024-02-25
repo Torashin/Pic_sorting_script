@@ -65,7 +65,7 @@ defaultdestdir = os.path.expanduser(defaultdestdir)
 
 
 class fileobject:
-    def __init__(self, path, source_dir):
+    def __init__(self, path, source_dir, is_in_dest=False):
         self.source_dir = source_dir
         self.abs_path = path
         self.abs_dir, self.filename = os.path.split(path)
@@ -80,6 +80,7 @@ class fileobject:
         self._meta_date = None
         self._camera_model = None
         self._metadata = None
+        self._image_hash = None
         self.decided_date = None
         self.new_basename = None
         self.new_filename = None
@@ -87,6 +88,8 @@ class fileobject:
         self.new_rel_dir = None
         self.problem_path = '/'
         self.update_meta_date = False
+        self.is_in_dest = is_in_dest
+
 
     @property
     def rel_dir(self):
@@ -219,6 +222,7 @@ class fileobject:
                         print(f'Error getting camera model for {self.abs_path}: \n{e}')
                 else:
                     print('Unsupported file format for this OS')
+                    tagdata = ''
             tagdata = tagdata.replace(":", "-")
             self._camera_model = tagdata
         return self._camera_model
@@ -232,6 +236,16 @@ class fileobject:
     @property
     def new_abs_path(self):
         return str(self.dest_dir + self.problem_path + self.new_rel_dir + self.new_basename + self.extension)
+
+    @property
+    def no_of_ags(self):
+        return len(self.metadata)
+
+    @property
+    def image_hash(self):
+        if not self._image_hash:
+            self._image_hash = imagehash.average_hash(self.abs_path)
+        return self._image_hash
 
 
 def get_metadata(files):
@@ -330,7 +344,7 @@ def movefile(fileobj, duplicate_check=True):
         pathlib.Path(fileobj.dest_dir + fileobj.problem_path + fileobj.new_rel_dir).mkdir(parents=True, exist_ok=True)
         existing_file_path = case_insensitive_exists(fileobj.new_abs_path)
         if existing_file_path:
-            if duplicate_check and are_duplicates_OS_dependent(fileobj.abs_path, existing_file_path) and fileobj.problem_path != '/Duplicates/':
+            if duplicate_check and fileobj.problem_path != '/Duplicates/' and are_duplicates_OS_dependent(fileobj, fileobject(existing_file_path, is_in_dest=True)):
                 print(
                     f'{fileobj.abs_path} has been recognised as a duplicate of {existing_file_path}')
                 fileobj.problem_path = '/Duplicates/'
@@ -514,8 +528,8 @@ def processfile(filepath, source_dir, dest_dir, gui_obj=None, rename=False, move
                 set_creation_date(finalfilepath, fileobj.updated_creation_date)
                 # Update files_processed count with lock
     if gui_obj:
-        gui_obj.files_processed += 1
-        gui_obj.update_status() # Update status after processing each file
+        with gui_obj.files_processed_lock:
+            gui_obj.files_processed += 1
     #print ('Finished moving file to ' + newfilepath)
 
 
@@ -556,14 +570,6 @@ def bulkfixcreationdates(dir):
 
 
 #######################################################################################################################
-
-
-class ImageFile:
-    def __init__(self, file_path, metadata, no_of_tags, image_hash):
-        self.file_path = file_path
-        self.metadata = metadata
-        self.no_of_tags = no_of_tags
-        self.image_hash = image_hash
 
 
 # Constants
@@ -692,17 +698,15 @@ def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
     image_files = []
     all_metadata = get_metadata(file_list)
     for file_path, metadata in zip(file_list, all_metadata):
-        no_of_tags = len(metadata)
         relevant_metadata = {key: metadata.get(key) for key in IMG_META_TAGS}  # Use .get() method
-        image_hash = imagehash.average_hash(Image.open(file_path))
-        image_files.append(ImageFile(file_path, relevant_metadata, no_of_tags, image_hash))
+        image_files.append(fileobject(file_path))
     grouped_files = {}
     for image_file in image_files:
         added_to_group = False
         for key in grouped_files:
             for group_image_file in grouped_files[key]:
-                similarity = imgcomp(image_file.file_path, group_image_file.file_path, image_file.image_hash, group_image_file.image_hash)
-                print(f'Comparing {image_file.file_path} and {group_image_file.file_path}: Similarity = {similarity:.1%}')
+                similarity = imgcomp(image_file.abs_path, group_image_file.abs_path, image_file.image_hash, group_image_file.image_hash)
+                print(f'Comparing {image_file.abs_path} and {group_image_file.abs_path}: Similarity = {similarity:.1%}')
                 if similarity > SIMILARITY_THRESHOLD:
                     print(f'  - Added to existing group')
                     grouped_files[key].append(image_file)
@@ -711,7 +715,7 @@ def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
             if added_to_group:
                 break
         if not added_to_group:
-            print(f'Creating new group for {image_file.file_path}')
+            print(f'Creating new group for {image_file.abs_path}')
             grouped_files[image_file.image_hash] = [image_file]
     files_to_delete = set()  # Use a set to avoid duplicates
     files_to_keep = []  # Create a list to store files that should be kept
@@ -720,21 +724,21 @@ def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
             group.sort(key=lambda image_file: image_file.no_of_tags, reverse=True)
             for i in range(len(group) - 1):
                 for j in range(i + 1, len(group)):
-                    print(f'Comparing metadata of {group[i].file_path} and {group[j].file_path}')
-                    if imgcomp(group[i].file_path, group[j].file_path, hash1=group[i].image_hash,
+                    print(f'Comparing metadata of {group[i].abs_path} and {group[j].abs_path}')
+                    if imgcomp(group[i].abs_path, group[j].abs_path, hash1=group[i].image_hash,
                                hash2=group[j].image_hash) > SIMILARITY_THRESHOLD:
                         if group[j].no_of_tags > group[i].no_of_tags:
-                            print(f'Adding file {group[i].file_path} to list of files to be deleted')
-                            files_to_delete.add(group[i].file_path)
+                            print(f'Adding file {group[i].abs_path} to list of files to be deleted')
+                            files_to_delete.add(group[i].abs_path)
                         else:
-                            print(f'Adding file {group[j].file_path} to list of files to be deleted')
-                            files_to_delete.add(group[j].file_path)
+                            print(f'Adding file {group[j].abs_path} to list of files to be deleted')
+                            files_to_delete.add(group[j].abs_path)
                     else:
-                        print(f'{group[i].file_path} and {group[j].file_path} are different')
+                        print(f'{group[i].abs_path} and {group[j].abs_path} are different')
     # Determine the files to keep for renaming
     for image_file in image_files:
-        if image_file.file_path not in files_to_delete:
-            files_to_keep.append(image_file.file_path)
+        if image_file.abs_path not in files_to_delete:
+            files_to_keep.append(image_file.abs_path)
     # Remove the files that need to be deleted
     for file_to_delete in files_to_delete:
         print(f'Deleting file {file_to_delete}')
@@ -943,10 +947,13 @@ if __name__ == "__main__":
     print('###############START###############')
     print('\n')
     #Test things#
-
+    print(get_metadata([r'/Users/James/Desktop/test/2024-02/IMG_0893 21.27.16.JPG']))
+    #edit_metadata(r'/Users/James/Desktop/IMG-20211017-WA0000.jpg', "DateTimeOriginal", "2024:02:19 12:00:00")
+    #print(get_metadata([r'/Users/James/Desktop/dest/2024-02/IMG_0893 21.27.16.JPG']))
     print('All done!')
 
 
 #   TODO: Add buttons to GUI for more useful functions.
 #   TODO: Stop getting metadata again when duplicate checking.
 #   TODO: Fix duplicate checking when using option to update metadata date.
+#   TODO: Function to change file extensions to upper or lower case.
