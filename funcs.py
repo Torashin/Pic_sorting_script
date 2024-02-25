@@ -676,10 +676,6 @@ def compare_exif(fileobj1, fileobj2, filetype):
 
 def imgcomp(fileobj1, fileobj2):
     try:
-        for file in (fileobj1, fileobj2):
-            if file.image_hash is None:
-                image = Image.open(file.abs_path)
-                file.image_hash = imagehash.average_hash(image)
         similarity = 1.0 - (fileobj1.image_hash - fileobj2.image_hash) / len(fileobj1.image_hash.hash) ** 2
         #print(f"Similarity between the images: {similarity:.1%}")
         return similarity
@@ -698,7 +694,7 @@ def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
         added_to_group = False
         for key in grouped_files:
             for group_image_file in grouped_files[key]:
-                similarity = imgcomp(image_file.abs_path, group_image_file.abs_path, image_file.image_hash, group_image_file.image_hash)
+                similarity = imgcomp(image_file, group_image_file)
                 print(f'Comparing {image_file.abs_path} and {group_image_file.abs_path}: Similarity = {similarity:.1%}')
                 if similarity > SIMILARITY_THRESHOLD:
                     print(f'  - Added to existing group')
@@ -718,8 +714,7 @@ def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
             for i in range(len(group) - 1):
                 for j in range(i + 1, len(group)):
                     print(f'Comparing metadata of {group[i].abs_path} and {group[j].abs_path}')
-                    if imgcomp(group[i].abs_path, group[j].abs_path, hash1=group[i].image_hash,
-                               hash2=group[j].image_hash) > SIMILARITY_THRESHOLD:
+                    if imgcomp(group[i], group[j]) > SIMILARITY_THRESHOLD:
                         if group[j].no_of_tags > group[i].no_of_tags:
                             print(f'Adding file {group[i].abs_path} to list of files to be deleted')
                             files_to_delete.add(group[i].abs_path)
@@ -798,11 +793,11 @@ def are_duplicates_OS_dependent(path1, path2):
     else:
         return are_hash_duplicates(path1, path2)
 
-def check_for_matching_jpeg(heic_path, existing_jpeg_names):
+def check_for_matching_jpeg(heic_path, existing_jpeg_names):    #check if jpeg with the same name and metadata exits
     dir = os.path.dirname(heic_path)
     for jpeg_filename in existing_jpeg_names:
         jpeg_path = os.path.join(dir, jpeg_filename)
-        meta_comp_result = compare_exif(heic_path, jpeg_path, 'image', getmeta=True)  # Compare metadata
+        meta_comp_result = compare_exif(heic_path, jpeg_path, 'image')  # Compare metadata
         if meta_comp_result in ['same']:
             print(f'A matching JPEG for {heic_path} already exists: {jpeg_filename}')
             return True
@@ -813,11 +808,12 @@ def smart_heic_to_jpeg(heic_path, QUALITY=90):
     print(f'Smart conversion  of {heic_path}')
     if heic_path.lower().endswith('.heic'):
         dir = os.path.dirname(heic_path)
+        fileobj = fileobject(heic_path, dir, is_in_dest=True)
         jpeg_path = os.path.splitext(heic_path)[0] + '.jpg'
         existing_jpeg_names = find_similar_fnames(jpeg_path)
         if existing_jpeg_names:
             print(f'There are already some jpegs similar to {heic_path}')
-            if not check_for_matching_jpeg(heic_path, existing_jpeg_names):  # if matching jpeg doesn't exist
+            if not check_for_matching_jpeg(heic_path, existing_jpeg_names):  # if matching jpeg doesn't exist (using metadata)
                 jpeg_name = os.path.basename(jpeg_path)
                 jpeg_name = generate_unique_filename(jpeg_name, existing_jpeg_names)
                 jpeg_path = os.path.join(dir, jpeg_name)
@@ -841,7 +837,7 @@ def bulk_convert_heic(dir_path, QUALITY=90):
             file_path = os.path.join(root, file_name)
             file_list.append(file_path)
     with concurrent.futures.ThreadPoolExecutor(12) as executor:
-        _ = [executor.submit(smart_heic_to_jpeg, file, QUALITY) for file in file_list]
+        _ = [executor.submit(smart_heic_to_jpeg, filepath, QUALITY) for filepath in file_list]
     t1 = time.time()
     totaltime = t1 - t0
     totaltime = round(totaltime)
