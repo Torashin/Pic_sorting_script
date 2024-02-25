@@ -536,7 +536,7 @@ def processfile(abs_path, source_dir, dest_dir, gui_obj=None, rename=False, move
                 if fileobj.camera_model == '':
                     fileobj.new_basename = fileobj.decided_date
                 else:
-                    fileobj.new_basename = fileobj.decided_date + " - " + fileobj.camera_model
+                    fileobj.new_basename = f'{fileobj.decided_date} - {fileobj.camera_model}'
             else:
                 fileobj.new_basename = fileobj.basename
         if movefiles:
@@ -704,12 +704,12 @@ def imgcomp(fileobj1, fileobj2):
         return 0
 
 
-def dedupe_image_files(file_list, SIMILARITY_THRESHOLD=1):
+def dedupe_image_files(file_list, source_dir, SIMILARITY_THRESHOLD=1):
     image_files = []
     all_metadata = get_metadata(file_list)
     for file_path, metadata in zip(file_list, all_metadata):
-        relevant_metadata = {key: metadata.get(key) for key in IMG_META_TAGS}  # Use .get() method
-        image_files.append(filemanager.get_file(file_path))
+        # relevant_metadata = {key: metadata.get(key) for key in IMG_META_TAGS}  # Use .get() method
+        image_files.append(filemanager.get_file(file_path, source_dir))
     grouped_files = {}
     for image_file in image_files:
         added_to_group = False
