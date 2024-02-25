@@ -706,53 +706,28 @@ def imgcomp(fileobj1, fileobj2):
 
 def dedupe_image_files(file_list, source_dir, SIMILARITY_THRESHOLD=1):
     image_files = []
-    all_metadata = get_metadata(file_list)
-    for file_path, metadata in zip(file_list, all_metadata):
-        # relevant_metadata = {key: metadata.get(key) for key in IMG_META_TAGS}  # Use .get() method
+    for file_path in file_list:
         image_files.append(filemanager.get_file(file_path, source_dir))
-    grouped_files = {}
+    hash_file_dict = {}
     for image_file in image_files:
-        added_to_group = False
-        for key in grouped_files:
-            for group_image_file in grouped_files[key]:
-                similarity = imgcomp(image_file, group_image_file)
-                print(f'Comparing {image_file.abs_path} and {group_image_file.abs_path}: Similarity = {similarity:.1%}')
-                if similarity > SIMILARITY_THRESHOLD:
-                    print(f'  - Added to existing group')
-                    grouped_files[key].append(image_file)
-                    added_to_group = True
-                    break
-            if added_to_group:
-                break
-        if not added_to_group:
-            print(f'Creating new group for {image_file.abs_path}')
-            grouped_files[image_file.image_hash] = [image_file]
-    files_to_delete = set()  # Use a set to avoid duplicates
-    files_to_keep = []  # Create a list to store files that should be kept
-    for group in grouped_files.values():
+        hash_file_dict.setdefault(image_file.image_hash, []).append(image_file)
+    files_to_delete = set()
+    for group in hash_file_dict.values():
         if len(group) > 1:
             group.sort(key=lambda image_file: image_file.no_of_tags, reverse=True)
             for i in range(len(group) - 1):
                 for j in range(i + 1, len(group)):
-                    print(f'Comparing metadata of {group[i].abs_path} and {group[j].abs_path}')
-                    if imgcomp(group[i], group[j]) > SIMILARITY_THRESHOLD:
+                    similarity = imgcomp(group[i], group[j])
+                    print(f'Comparing hashes of {group[i].abs_path} and {group[j].abs_path}: Similarity = {similarity:.1%}')
+                    if similarity > SIMILARITY_THRESHOLD:
                         if group[j].no_of_tags > group[i].no_of_tags:
-                            print(f'Adding file {group[i].abs_path} to list of files to be deleted')
                             files_to_delete.add(group[i].abs_path)
                         else:
-                            print(f'Adding file {group[j].abs_path} to list of files to be deleted')
                             files_to_delete.add(group[j].abs_path)
-                    else:
-                        print(f'{group[i].abs_path} and {group[j].abs_path} are different')
-    # Determine the files to keep for renaming
-    for image_file in image_files:
-        if image_file.abs_path not in files_to_delete:
-            files_to_keep.append(image_file.abs_path)
-    # Remove the files that need to be deleted
+    files_to_keep = [image_file.abs_path for image_file in image_files if image_file.abs_path not in files_to_delete]
     for file_to_delete in files_to_delete:
         print(f'Deleting file {file_to_delete}')
         os.remove(file_to_delete)
-    # Update the filenames for the files that need to be kept
     update_filenames(files_to_keep)
 
 
