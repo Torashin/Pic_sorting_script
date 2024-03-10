@@ -529,8 +529,7 @@ def processfile(abs_path, source_dir, dest_dir, gui_obj=None, rename=False, move
         else:
             if update_file_date:
                 fileobj.updated_creation_date = fileobj.decided_date
-            if update_meta_date:
-                fileobj.update_meta_date = True
+            fileobj.update_meta_date = update_meta_date
             fileobj.new_rel_dir = fileobj.decided_date[:7] + '/'
             if rename:
                 if fileobj.camera_model == '':
@@ -930,18 +929,34 @@ def update_file_meta_date(fileobj):
     else:
         print('Can\'t change exif date')
 
+def change_extension_case(folder_path, case='l'):
+    # Get a list of all files in the folder
+    files = os.listdir(folder_path)
+    # Convert case to either uppercase or lowercase
+    case = case.lower()
+    # Traverse through the directory tree
+    for root, directories, files in os.walk(folder_path):
+        # Iterate over each file in the current directory
+        for file_name in files:
+            # Split the file name and extension
+            base_name, old_extension = os.path.splitext(file_name)
+            # Construct the new file name with the new extension
+            new_extension_formatted = old_extension.upper() if case == 'u' else old_extension.lower()
+            new_file_name = f"{base_name}{new_extension_formatted}"
+            if new_file_name != file_name:
+                # Rename the file
+                print(f'Renaming {file_name} to {new_file_name}')
+                os.rename(os.path.join(root, file_name), os.path.join(root, new_file_name))
+
+
+
 
 if __name__ == "__main__":
     print('###############START###############')
     print('\n')
-    #Test things#
-    print(get_metadata([r'/Users/James/Desktop/test/2024-02/IMG_0893 21.27.16.JPG']))
-    #edit_metadata(r'/Users/James/Desktop/IMG-20211017-WA0000.jpg', "DateTimeOriginal", "2024:02:19 12:00:00")
-    #print(get_metadata([r'/Users/James/Desktop/dest/2024-02/IMG_0893 21.27.16.JPG']))
+    #Test things
+
     print('All done!')
 
 
 #   TODO: Add buttons to GUI for more useful functions.
-#   TODO: Stop getting metadata again when duplicate checking.
-#   TODO: Fix duplicate checking when using option to update metadata date.
-#   TODO: Function to change file extensions to upper or lower case.
