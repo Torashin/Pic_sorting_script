@@ -68,23 +68,24 @@ class FileManager:
     def __init__(self):
         self.file_objects_dict = {}
 
-    def add_file(self, abs_path, source_dir=None, is_in_dest=False):
+    def add_file(self, abs_path, base_dir=None, is_in_dest=False):
         if abs_path not in self.file_objects_dict:
-            self.file_objects_dict[abs_path] = FileObject(abs_path, source_dir, is_in_dest)
+            self.file_objects_dict[abs_path] = FileObject(abs_path, base_dir, is_in_dest)
 
-    def get_file(self, abs_path, source_dir=None, is_in_dest=False):
+    def get_file(self, abs_path, base_dir=None, is_in_dest=False):
         if abs_path not in self.file_objects_dict:
             print(f"Creating FileObject for {abs_path}")
-            self.add_file(abs_path, source_dir, is_in_dest)
+            self.add_file(abs_path, base_dir, is_in_dest)
         return self.file_objects_dict.get(abs_path)
 
 class FileObject:
-    def __init__(self, abs_path, source_dir=None, is_in_dest=False):
-        self.source_dir = source_dir
+    def __init__(self, abs_path, base_dir=None, is_in_dest=False):
+        self.base_dir = base_dir
         self.abs_path = abs_path
         self.abs_dir, self.filename = os.path.split(abs_path)
         self.basename, extension = os.path.splitext(self.filename)
         self.extension = extension.lower()
+        self._rel_path = None
         self._rel_dir = None
         self._media_type = None
         self._creation_date = None
@@ -102,17 +103,21 @@ class FileObject:
         self.problem_path = '/'
         self.update_meta_date = False
         self.is_in_dest = is_in_dest
-
         if is_in_dest:
-            self.dest_dir = source_dir
+            self.dest_dir = base_dir
         else:
             self.dest_dir = None
 
+    @property
+    def rel_path(self):
+        if self._rel_path is None:
+            self._rel_path = os.path.relpath(self.abs_path, self.base_dir)
+        return self._rel_path
 
     @property
     def rel_dir(self):
         if self._rel_dir is None:
-            self._rel_dir = os.path.relpath(self.abs_dir, self.source_dir)
+            self._rel_dir = os.path.relpath(self.abs_dir, self.base_dir)
         return self._rel_dir
 
     @property
@@ -253,7 +258,10 @@ class FileObject:
 
     @property
     def new_abs_path(self):
-        return str(self.dest_dir + self.problem_path + self.new_rel_dir + self.new_basename + self.extension)
+        if self.is_in_dest:
+            return self.abs_path
+        else:
+            return str(self.dest_dir + self.problem_path + self.new_rel_dir + self.new_basename + self.extension)
 
     @property
     def no_of_ags(self):
@@ -437,13 +445,14 @@ def analyse_date(date_input):
         return False
 
 
-def get_list_of_files(directory):
-    allFiles = list()
-    allFiles = list()
-    for dirpath ,_ ,filenames in os.walk(directory):
-        for f in filenames:
-            allFiles.append(os.path.abspath(os.path.join(dirpath, f)))
-    return allFiles
+def get_list_of_files(directory, folder_depth=None):
+    all_files = []
+    for root, dirs, files in os.walk(directory):
+        depth = root[len(directory) + len(os.path.sep):].count(os.path.sep)
+        if folder_depth is None or depth <= folder_depth:
+            for file in files:
+                all_files.append(os.path.join(root, file))
+    return all_files
 
 
 def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_use_folderdate):
@@ -908,12 +917,12 @@ def bulkprocess_sort_by_exif_quality(source_dir, dest):
     totaltime = round(totaltime)
     print ('\nFinished in ' + str(totaltime) + ' seconds')
 
-def edit_metadata(image_path, tag, new_value):
+def edit_metadata(image_path, metadata_changes):
     if exiftool_supported:
+        print('Starting metadata edit...')
         with exiftool.ExifToolHelper() as et:
-            metadata = {tag: new_value}
             try:
-                et.execute("-overwrite_original", *[f"-{k}={v}" for k, v in metadata.items()], image_path)
+                et.execute("-overwrite_original", *[f"-{k}={v}" for k, v in metadata_changes.items()], image_path)
                 print("Metadata edited successfully.")
             except Exception as e:
                 print(f"An error occurred while editing metadata: {e}")
@@ -922,12 +931,16 @@ def edit_metadata(image_path, tag, new_value):
 
 def update_file_meta_date(fileobj):
     new_date = fileobj.decided_date.replace("-", ":")
+    metadata_changes = {}
     if fileobj.media_type == 'image':
-        edit_metadata(fileobj.new_abs_path, 'DateTimeOriginal', new_date)
+        metadata_changes['DateTimeOriginal'] = new_date
     elif fileobj.media_type == 'video':
-        edit_metadata(fileobj.new_abs_path, 'CreateDate', new_date)
+        metadata_changes['CreateDate'] = new_date
+        metadata_changes['MediaCreateDate'] = new_date
     else:
         print('Can\'t change exif date')
+        return  # Return if media type is not recognized
+    edit_metadata(fileobj.new_abs_path, metadata_changes)
 
 def change_extension_case(folder_path, case='l'):
     # Get a list of all files in the folder
@@ -948,7 +961,21 @@ def change_extension_case(folder_path, case='l'):
                 print(f'Renaming {file_name} to {new_file_name}')
                 os.rename(os.path.join(root, file_name), os.path.join(root, new_file_name))
 
-
+def mirror_cdate_to_video_files(source_dir, dest_dir, folder_depth=1):
+    # Written to batch copy file creation metadata to the new optimised versions of video files
+    file_manager = FileManager()
+    dest_files = get_list_of_files(dest_dir, folder_depth)
+    for dest_file in dest_files:
+        dest_fileobj = file_manager.get_file(dest_file, dest_dir, is_in_dest=True)
+        if dest_fileobj.media_type == 'video':
+            source_file = os.path.join(source_dir, dest_fileobj.rel_path)
+            if os.path.exists(source_file):
+                source_fileobj = file_manager.get_file(source_file, source_dir)
+                set_creation_date(dest_file, source_fileobj.creation_date)
+                dest_fileobj.decided_date = source_fileobj.creation_date
+                update_file_meta_date(dest_fileobj)
+        else:
+            print(f"File {dest_fileobj.rel_path} does not exist in source directory.")
 
 
 if __name__ == "__main__":
@@ -960,3 +987,4 @@ if __name__ == "__main__":
 
 
 #   TODO: Add buttons to GUI for more useful functions.
+#   TODO: Track files that don't finish processing successfully.
