@@ -21,6 +21,7 @@ import funcs as pssfuncs
 import os
 import threading
 
+
 class PicSortingScriptGUI:
     def __init__(self):
         self.working_directory = os.getcwd()
@@ -34,6 +35,7 @@ class PicSortingScriptGUI:
         self.finish_event = threading.Event()  # Event to signal finish
         self.window = self.create_window()
 
+
     @property
     def percent_processed(self):
         if self.total_files > 0 and self.files_processed > 0:
@@ -41,9 +43,9 @@ class PicSortingScriptGUI:
         else:
             return 0
 
+
     def create_window(self):
         sg.theme('DarkBlue')
-
         main_layout = [
             [sg.Text('Select source directory:', pad=(5, (5, 0)))],
             [sg.InputText(pssfuncs.defaultsourcedir, size=(50, 1), key='-sourcedir-'),
@@ -84,6 +86,7 @@ class PicSortingScriptGUI:
         layout = main_layout + status_bar_layout
         return sg.Window('Pic Sorting Script', layout, finalize=True)
 
+
     def update_status(self, status_msg=None):
         if status_msg:
             self.status = status_msg
@@ -94,6 +97,7 @@ class PicSortingScriptGUI:
         if self.window:
             self.window['-statusbar-'].update(f'Status: {self.status}', text_color=self.statusbar_color[1],
                                               background_color=self.statusbar_color[0])
+
 
     def start_process(self, values):
         sourcedir = values['-sourcedir-']
@@ -110,6 +114,13 @@ class PicSortingScriptGUI:
         self.files_processed = 0
         self.update_status()
 
+        # Set flags
+        self.is_running = True
+
+        # Update button states
+        self.window['-go-'].update(visible=False)
+        self.window['-stop-'].update(visible=True)
+
         # Start processing in a separate thread
         self.process_thread = threading.Thread(
             target=pssfuncs.bulkprocess,
@@ -120,16 +131,17 @@ class PicSortingScriptGUI:
 
 
     def stop_process(self):
-        if self.is_running:
-            self.update_status('Stopping')
-            self.stop_event.set()  # Signal the processing to stop
-            self.process_thread.join()  # Wait for the thread to finish
-            self.is_running = False
+        self.stop_event.set()  # Signal the thread to stop
+        self.process_thread.join()  # Wait for the thread to finish
 
-            # Update button states
-            self.window['-go-'].update(visible=True)
-            self.window['-stop-'].update(visible=False)
-            self.update_status('Process stopped')
+        # Set flags
+        self.is_running = False
+        self.stop_event.clear()  # Clear the stop event
+
+        # Update button states
+        self.window['-go-'].update(visible=True)
+        self.window['-stop-'].update(visible=False)
+
 
     def run(self):
         while True:
@@ -139,20 +151,10 @@ class PicSortingScriptGUI:
                 break
             elif event == '-go-':
                 if not self.is_running:
-                    self.is_running = True
                     self.start_process(values)
-                    # Update button states
-                    self.window['-go-'].update(visible=False)
-                    self.window['-stop-'].update(visible=True)
             elif event == '-stop-':
                 if self.is_running:
-                    self.stop_event.set()  # Signal the thread to stop
-                    self.process_thread.join()  # Wait for the thread to finish
-                    self.is_running = False
-                    self.stop_event.clear()  # Clear the stop event
-                    # Update button states
-                    self.window['-go-'].update(visible=True)
-                    self.window['-stop-'].update(visible=False)
+                    self.stop_process()
             elif self.finish_event.is_set():
                 self.is_running = False
                 self.finish_event.clear()  # Clear the finish event
@@ -160,8 +162,8 @@ class PicSortingScriptGUI:
                 self.window['-go-'].update(visible=True)
                 self.window['-stop-'].update(visible=False)
 
-
         self.window.close()
+
 
 # Instantiate and run the GUI
 if __name__ == '__main__':
