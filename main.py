@@ -29,6 +29,9 @@ class PicSortingScriptGUI:
         self.total_files = 0
         self.files_processed = 0
         self.files_processed_lock = threading.Lock()
+        self.is_running = False  # Flag to track if process is running
+        self.stop_event = threading.Event()  # Event to signal stop
+        self.finish_event = threading.Event()  # Event to signal finish
         self.window = self.create_window()
 
     @property
@@ -68,7 +71,8 @@ class PicSortingScriptGUI:
                 [sg.Radio('No', 'update_meta_date', key='-update_meta_date_false-', default=True),
                  sg.Radio('Yes', 'update_meta_date', key='-update_meta_date_true-')],
             ], pad=(5, (15, 5)))],
-            [sg.Push(), sg.Button('Go!', key='-go-', size=(10, 1), pad=((5, 5), (20, 15)))],
+            [sg.Push(), sg.Button('Go!', key='-go-', size=(10, 1), pad=((5, 5), (20, 15))),
+             sg.Button('Stop', key='-stop-', size=(10, 1), pad=((5, 5), (20, 15)), visible=False)]  # Stop button initially hidden
         ]
 
         status_bar_layout = [
@@ -91,43 +95,71 @@ class PicSortingScriptGUI:
             self.window['-statusbar-'].update(f'Status: {self.status}', text_color=self.statusbar_color[1],
                                               background_color=self.statusbar_color[0])
 
-    def run(self):
+    def start_process(self, values):
+        sourcedir = values['-sourcedir-']
+        destdir = values['-destdir-']
+        move_files = True if values['-move-'] else False
+        rename_files = True if values['-generate-'] else False
+        filedate_beats_metadadate = False if values['-filedate-'] else False
+        need_folderdate_match = True if values['-folderdate_true-'] else False
+        update_file_date = True if values['-update_file_date_true-'] else False
+        update_meta_date = True if values['-update_meta_date_true-'] else False
+
+        # Update status bar
+        self.total_files = 0  # Set the total number of files (replace with actual count)
+        self.files_processed = 0
         self.update_status()
+
+        # Start processing in a separate thread
+        self.process_thread = threading.Thread(
+            target=pssfuncs.bulkprocess,
+            args=(sourcedir, destdir, self, rename_files, move_files, need_folderdate_match,
+                  filedate_beats_metadadate, update_file_date, update_meta_date)
+        )
+        self.process_thread.start()
+
+
+    def stop_process(self):
+        if self.is_running:
+            self.update_status('Stopping')
+            self.stop_event.set()  # Signal the processing to stop
+            self.process_thread.join()  # Wait for the thread to finish
+            self.is_running = False
+
+            # Update button states
+            self.window['-go-'].update(visible=True)
+            self.window['-stop-'].update(visible=False)
+            self.update_status('Process stopped')
+
+    def run(self):
         while True:
+            self.update_status()
             event, values = self.window.read(timeout=100)  # Increase the timeout for smoother status bar updates
             if event == sg.WIN_CLOSED:
                 break
             elif event == '-go-':
-                # Retrieve values from GUI elements
-                sourcedir = values['-sourcedir-']
-                destdir = values['-destdir-']
-                move_files = True if values['-move-'] else False
-                rename_files = True if values['-generate-'] else False
-                filedate_beats_metadadate = False if values['-filedate-'] else False
-                need_folderdate_match = True if values['-folderdate_true-'] else False
-                update_file_date = True if values['-update_file_date_true-'] else False
-                update_meta_date = True if values['-update_meta_date_true-'] else False
+                if not self.is_running:
+                    self.is_running = True
+                    self.start_process(values)
+                    # Update button states
+                    self.window['-go-'].update(visible=False)
+                    self.window['-stop-'].update(visible=True)
+            elif event == '-stop-':
+                if self.is_running:
+                    self.stop_event.set()  # Signal the thread to stop
+                    self.process_thread.join()  # Wait for the thread to finish
+                    self.is_running = False
+                    self.stop_event.clear()  # Clear the stop event
+                    # Update button states
+                    self.window['-go-'].update(visible=True)
+                    self.window['-stop-'].update(visible=False)
+            elif self.finish_event.is_set():
+                self.is_running = False
+                self.finish_event.clear()  # Clear the finish event
+                # Update button states
+                self.window['-go-'].update(visible=True)
+                self.window['-stop-'].update(visible=False)
 
-                # Update status bar
-                self.total_files = 0  # Set the total number of files (replace with actual count)
-                self.files_processed = 0
-                self.update_status()
-
-                # Perform processing in a separate thread
-                async_func = threading.Thread(
-                    target=pssfuncs.bulkprocess,
-                    args=(sourcedir, destdir, self, rename_files, move_files, need_folderdate_match,
-                          filedate_beats_metadadate,update_file_date, update_meta_date)
-                )
-                async_func.start()
-
-                # Optionally wait for the thread to finish before updating the status bar back to "Ready"
-                # async_func.join()
-
-                # Note: You may want to update self.files_processed within the bulkprocess function to indicate the progress.
-
-                # Update status bar back to "Ready"
-                self.update_status()
 
         self.window.close()
 
@@ -135,3 +167,4 @@ class PicSortingScriptGUI:
 if __name__ == '__main__':
     gui = PicSortingScriptGUI()
     gui.run()
+

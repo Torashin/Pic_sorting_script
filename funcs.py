@@ -91,6 +91,7 @@ class FileObject:
         self._creation_date = None
         self.updated_creation_date = None
         self._modified_date = None
+        self._filename_date = None
         self._folder_date = None
         self._meta_date = None
         self._camera_model = None
@@ -157,6 +158,13 @@ class FileObject:
             # of ISO 8601 format
             self._modified_date = time.strftime("%Y-%m-%d %H-%M-%S", mt_obj)
         return self._modified_date
+
+    @property
+    def filename_date(self):
+        if self._filename_date is None:
+            filename_date = analyse_date(self.basename[:10])
+            self._filename_date = filename_date
+        return self._filename_date
 
     @property
     def folder_date(self):
@@ -454,9 +462,19 @@ def get_list_of_files(directory, folder_depth=None):
                 all_files.append(os.path.join(root, file))
     return all_files
 
-
 def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_use_folderdate):
-    if fileobj.folder_date == False:
+    filename_or_folder_date = None
+    a = fileobj.filename_date
+    if fileobj.folder_date and fileobj.filename_date:
+        if abs(daysbetween(fileobj.folder_date, fileobj.filename_date)) <= 32:
+            filename_or_folder_date = fileobj.filename_date
+        else:
+            filename_or_folder_date = fileobj.folder_date
+    elif fileobj.filename_date:
+        filename_or_folder_date = fileobj.filename_date
+    else:
+        filename_or_folder_date = fileobj.folder_date
+    if filename_or_folder_date == False:
         if need_folderdate_match or only_use_folderdate:
             print('Failed to get folder date for ' + fileobj.abs_path + ', - not allowed to proceed (need_folderdate_match=True)')
             return False
@@ -476,12 +494,12 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_us
             print ('Failed to get folder date and metadata date for ' + fileobj.abs_path)
             return False
     elif only_use_folderdate:
-        return  fileobj.folder_date
+        return filename_or_folder_date
     elif filedate_beats_metadadata:
-        if abs(daysbetween(fileobj.updated_creation_date, fileobj.folder_date)) < 60:
+        if abs(daysbetween(fileobj.updated_creation_date, filename_or_folder_date)) < 60:
             print('Using file date for ' + fileobj.abs_path + ', which matches folder date')
             return fileobj.updated_creation_date
-        elif fileobj.meta_date and abs(daysbetween(fileobj.meta_date, fileobj.folder_date)) < 60:
+        elif fileobj.meta_date and abs(daysbetween(fileobj.meta_date, filename_or_folder_date)) < 60:
             print('Using metadata date for ' + fileobj.abs_path + ', which matches folder date')
             return fileobj.meta_date
         elif need_folderdate_match:
@@ -494,10 +512,10 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_us
             print('Failed to get an accurate date for ' + fileobj.abs_path + ' because none of them agreed')
             return False
     else:
-        if fileobj.meta_date and abs(daysbetween(fileobj.meta_date, fileobj.folder_date)) < 60:
+        if fileobj.meta_date and abs(daysbetween(fileobj.meta_date, filename_or_folder_date)) < 60:
             print('Using metadata date for ' + fileobj.abs_path + ', which matches folder date')
             return fileobj.meta_date
-        elif abs(daysbetween(fileobj.updated_creation_date, fileobj.folder_date)) < 60:
+        elif abs(daysbetween(fileobj.updated_creation_date, filename_or_folder_date)) < 60:
             print('Using file date for ' + fileobj.abs_path + ', which matches folder date')
             return fileobj.updated_creation_date
         elif need_folderdate_match:
@@ -510,18 +528,21 @@ def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_us
             print('Failed to get an accurate date for ' + fileobj.abs_path + ' because none of them agreed')
             return False
 
-
 filemanager = FileManager()
 
 
 def processfile(abs_path, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_file_date=False, update_meta_date=False, only_use_folderdate = False):
+    if gui_obj.stop_event and gui_obj.stop_event.is_set():
+        return
     print ('Processing ' + abs_path)
     #supported_extensions = ('.pdf', '.cr2', '.mov', '.png', '.jpg', '.jpeg','.mpg', '.3gp', '.bmp', '.avi', '.wmv', '.xmp', '.mdi', '.tif', '.psf', '.xlsx', '.zip', '.doc', '.gif', '.pps', '.mpe', '.flv', '.asf', '.xls', '.psd', '.m2ts', '.heic', '.mp4', '.m4v')
     supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
     fileobj = filemanager.get_file(abs_path, source_dir)
+    if gui_obj.stop_event and gui_obj.stop_event.is_set():
+        return
     fileobj.dest_dir = dest_dir
     if fileobj.extension not in supported_extensions:
-        print(abs_path + ' does not have an accepted extension; `skipping...')
+        print(abs_path + ' does not have an accepted extension; skipping...')
     else:
         if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0:
             change_creation_date = True
@@ -567,21 +588,36 @@ def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, n
     listoffiles = get_list_of_files(source_dir)
     if gui_obj:
         gui_obj.total_files = len(listoffiles)
-    with concurrent.futures.ThreadPoolExecutor(16) as executor:
-        _ = [executor.submit(processfile, abs_path, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, update_file_date, update_meta_date, only_use_folderdate) for abs_path in listoffiles]
+    with concurrent.futures.ThreadPoolExecutor(8) as executor:
+        futures = [executor.submit(processfile, abs_path, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, update_file_date, update_meta_date, only_use_folderdate) for abs_path in listoffiles]
+        for future in concurrent.futures.as_completed(futures):
+            if gui_obj.stop_event and gui_obj.stop_event.is_set():
+                print('\nStarting shut down of ThreadPoolExecutor...\n')
+                executor.shutdown(wait=False, cancel_futures=True)
+            break
     t1 = time.time()
     totaltime = t1-t0
     totaltime = round(totaltime)
-    print ('\nFinished in ' + str(totaltime) + ' seconds')
+    if gui_obj.stop_event and gui_obj.stop_event.is_set():
+        print('\nStopped by user after ' + str(totaltime) + ' seconds')
+    else:
+        print('\nFinished in ' + str(totaltime) + ' seconds')
+
+    if gui_obj.finish_event:
+        gui_obj.finish_event.set()  # Indicate that the process has completed
 
 
 def fixcreationdate(path, source_dir):
     print ('Processing ' + path)
-    fileobj = filemanager.get_file(path, source_dir)
-    if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0:
-        print ('Fixing creation date from ' + fileobj.creation_date + ' to ' + fileobj.modified_date)
-        fileobj.updated_creation_date = fileobj.modified_date
-        set_creation_date(fileobj.abs_path, fileobj.updated_creation_date)
+    try:
+        fileobj = filemanager.get_file(path, source_dir)
+        if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0:
+            print ('Fixing creation date from ' + fileobj.creation_date + ' to ' + fileobj.modified_date)
+            fileobj.updated_creation_date = fileobj.modified_date
+            set_creation_date(fileobj.abs_path, fileobj.updated_creation_date)
+    except Exception as e:
+        raise RuntimeError(f'Fixcreationdate failed with error: {str(e)}')
+
 
 
 def bulkfixcreationdates(dir):
@@ -982,7 +1018,12 @@ if __name__ == "__main__":
     print('###############START###############')
     print('\n')
     #Test things
-
+    #edit_metadata(r'/Users/James/Desktop/IMG-20211017-WA0000.jpg', "DateTimeOriginal", "2024:02:19 12:00:00")
+    #print(get_metadata([r'/Users/James/Desktop/dest/2024-02/IMG_0893 21.27.16.JPG']))
+    #change_extension_case(r'C:\Users\james\Desktop\test', 'u')
+    #mirror_cdate_to_video_files(r'G:\Game Recordings\Apex Legends', r'G:\Game Recordings\Apex Legends\Re-encoded')
+    #print(get_metadata([r'C:\Users\james\Desktop\dest\Apex Legends 2021.05.24 - 22.09.02.17.Dvr.mp4']))
+    bulkfixcreationdates(r'C:\Users\james\Desktop\Camera Rolls')
     print('All done!')
 
 
