@@ -365,6 +365,13 @@ def copyfile(fileobj, duplicate_check=True):
     # copy file
     print(f'Copying {fileobj.abs_path} to {fileobj.new_abs_path}')
     shutil.copy2(fileobj.abs_path, fileobj.new_abs_path)
+
+    if fileobj.updated_creation_date:
+        creation_date = fileobj.updated_creation_date
+    else:
+        creation_date = fileobj.creation_date
+    set_creation_date(fileobj.new_abs_path, creation_date)
+
     if fileobj.update_meta_date:
         update_file_meta_date(fileobj)
     return fileobj.new_abs_path
@@ -387,8 +394,17 @@ def movefile(fileobj, duplicate_check=True):
             n += 1
         else:
             break
-    # move file
+
+    # First, determine if it's a cross-volume move
+    same_volume = os.stat(fileobj.abs_path).st_dev == os.stat(os.path.dirname(fileobj.new_abs_path)).st_dev
+    # Then move the file
     shutil.move(fileobj.abs_path, fileobj.new_abs_path)
+    # Decide whether to reset creation date
+    if fileobj.updated_creation_date:
+        set_creation_date(fileobj.new_abs_path, fileobj.updated_creation_date)
+    elif not same_volume:
+        set_creation_date(fileobj.new_abs_path, fileobj.creation_date)
+
     if fileobj.update_meta_date:
         update_file_meta_date(fileobj)
     return fileobj.new_abs_path
@@ -462,149 +478,298 @@ def get_list_of_files(directory, folder_depth=None):
                 all_files.append(os.path.join(root, file))
     return all_files
 
-def datelogic(fileobj, need_folderdate_match, filedate_beats_metadadata, only_use_folderdate):
+def datelogic(
+    fileobj,
+    need_folderdate_match,
+    filedate_beats_metadadata,
+    only_use_folderdate,
+    known_year=None,
+    known_month=None
+):
+    """
+    Decide which date to adopt, prioritizing folder/filename/meta/file date
+    according to your existing logic. If known_year or known_month are provided,
+    then we first discard any date fields that don't match that year/month.
+    """
+
+    # We'll create local variables for each date field so we can selectively
+    # set them to False if they don't match known_year/month:
+    cdate = fileobj.updated_creation_date  # This is the "file date" (creation/mod)
+    mdate = fileobj.meta_date
+    fdate = fileobj.filename_date
+    flddate = fileobj.folder_date
+
+    # A helper to check if a date string "YYYY-MM-DD HH-MM-SS" matches known year/month
+    def matches_year_month(date_str):
+        if not date_str or date_str is False:
+            return False
+        if known_year is None and known_month is None:
+            return True  # not forcing any year/month, accept
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d %H-%M-%S")
+        except ValueError:
+            return False
+        if known_year is not None and dt.year != known_year:
+            return False
+        if known_month is not None and dt.month != known_month:
+            return False
+        return True
+
+    # Filter out date fields that do NOT match the forced year/month (if any)
+    if not matches_year_month(cdate):
+        cdate = False
+    if not matches_year_month(mdate):
+        mdate = False
+    if not matches_year_month(fdate):
+        fdate = False
+    if not matches_year_month(flddate):
+        flddate = False
+
+    # Now we do the original day-difference-based picking logic exactly as before:
+
+    # First, see if we can unify folder_date and filename_date:
     filename_or_folder_date = None
-    a = fileobj.filename_date
-    if fileobj.folder_date and fileobj.filename_date:
-        if abs(daysbetween(fileobj.folder_date, fileobj.filename_date)) <= 32:
-            filename_or_folder_date = fileobj.filename_date
+    if flddate and fdate:
+        # If they're within 32 days, prefer filename date, else folder date
+        if abs(daysbetween(flddate, fdate)) <= 32:
+            filename_or_folder_date = fdate
         else:
-            filename_or_folder_date = fileobj.folder_date
-    elif fileobj.filename_date:
-        filename_or_folder_date = fileobj.filename_date
+            filename_or_folder_date = flddate
+    elif fdate:
+        filename_or_folder_date = fdate
     else:
-        filename_or_folder_date = fileobj.folder_date
-    if filename_or_folder_date == False:
+        filename_or_folder_date = flddate
+
+    # If both folder_date and filename_date are False (meaning no match or none exist):
+    if filename_or_folder_date is False:
+        # If the user requires folderdate:
         if need_folderdate_match or only_use_folderdate:
-            print('Failed to get folder date for ' + fileobj.abs_path + ', - not allowed to proceed (need_folderdate_match=True)')
+            print(f"Failed to get folder date for {fileobj.abs_path}, - not allowed to proceed (need_folderdate_match=True)")
             return False
-        elif fileobj.meta_date:
-            # print ('Metadata date for ' + file + ' = ' + metadate)
-            if abs(daysbetween(fileobj.updated_creation_date, fileobj.meta_date)) < 60:
-                if filedate_beats_metadadata:
-                    print('Using file date for ' + fileobj.abs_path + ', which matches folder date')
-                    return fileobj.updated_creation_date
+        else:
+            # Fallback to meta_date or file_date
+            if mdate:
+                # If meta_date is close to file date, pick whichever has priority
+                if cdate and abs(daysbetween(cdate, mdate)) < 60:
+                    if filedate_beats_metadadata:
+                        return cdate
+                    else:
+                        return mdate
                 else:
-                    print('Using metadata date for ' + fileobj.abs_path + ', which matches folder date')
-                    return fileobj.meta_date
+                    # If only meta_date is valid
+                    return mdate
+            elif cdate:
+                return cdate
             else:
-                print ('Failed to get folder date for ' + fileobj.abs_path + ', and metadata and file dates don\'t match')
+                print(f"Failed to get folder date and metadata date for {fileobj.abs_path}")
                 return False
-        else:
-            print ('Failed to get folder date and metadata date for ' + fileobj.abs_path)
-            return False
-    elif only_use_folderdate:
-        return filename_or_folder_date
-    elif filedate_beats_metadadata:
-        if abs(daysbetween(fileobj.updated_creation_date, filename_or_folder_date)) < 60:
-            print('Using file date for ' + fileobj.abs_path + ', which matches folder date')
-            return fileobj.updated_creation_date
-        elif fileobj.meta_date and abs(daysbetween(fileobj.meta_date, filename_or_folder_date)) < 60:
-            print('Using metadata date for ' + fileobj.abs_path + ', which matches folder date')
-            return fileobj.meta_date
-        elif need_folderdate_match:
-            print('Failed to get an accurate date for ' + fileobj.abs_path + ' because none of them agreed with folderdate')
-            return False
-        elif fileobj.meta_date and abs(daysbetween(fileobj.updated_creation_date, fileobj.meta_date)) < 60:
-            print('Using file date for ' + fileobj.abs_path + ', but it does not match folder date')
-            return fileobj.updated_creation_date
-        else:
-            print('Failed to get an accurate date for ' + fileobj.abs_path + ' because none of them agreed')
-            return False
-    else:
-        if fileobj.meta_date and abs(daysbetween(fileobj.meta_date, filename_or_folder_date)) < 60:
-            print('Using metadata date for ' + fileobj.abs_path + ', which matches folder date')
-            return fileobj.meta_date
-        elif abs(daysbetween(fileobj.updated_creation_date, filename_or_folder_date)) < 60:
-            print('Using file date for ' + fileobj.abs_path + ', which matches folder date')
-            return fileobj.updated_creation_date
-        elif need_folderdate_match:
-            print('Failed to get an accurate date for ' + fileobj.abs_path + ' because none of them agreed with folderdate')
-            return False
-        elif fileobj.meta_date and abs(daysbetween(fileobj.updated_creation_date, fileobj.meta_date)) < 60:
-            print('Using metadata date for ' + fileobj.abs_path + ', but it does not match folder date')
-            return fileobj.meta_date
-        else:
-            print('Failed to get an accurate date for ' + fileobj.abs_path + ' because none of them agreed')
-            return False
 
-filemanager = FileManager()
-
-
-def processfile(abs_path, source_dir, dest_dir, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_file_date=False, update_meta_date=False, only_use_folderdate = False):
-    if gui_obj.stop_event and gui_obj.stop_event.is_set():
-        return
-    print ('Processing ' + abs_path)
-    #supported_extensions = ('.pdf', '.cr2', '.mov', '.png', '.jpg', '.jpeg','.mpg', '.3gp', '.bmp', '.avi', '.wmv', '.xmp', '.mdi', '.tif', '.psf', '.xlsx', '.zip', '.doc', '.gif', '.pps', '.mpe', '.flv', '.asf', '.xls', '.psd', '.m2ts', '.heic', '.mp4', '.m4v')
-    supported_extensions = ('.jpg', '.jpeg', '.heic', '.mov', '.png', '.mp4', '.m4v', '.mpg')
-    fileobj = filemanager.get_file(abs_path, source_dir)
-    if gui_obj.stop_event and gui_obj.stop_event.is_set():
-        return
-    fileobj.dest_dir = dest_dir
-    if fileobj.extension not in supported_extensions:
-        print(abs_path + ' does not have an accepted extension; skipping...')
-    else:
-        if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0:
-            change_creation_date = True
-            fileobj.updated_creation_date = fileobj.modified_date
+    # If we have some folder/filename date:
+    if filedate_beats_metadadata:
+        # Check if cdate is close (within 60 days) to folder/filename date
+        if cdate and abs(daysbetween(cdate, filename_or_folder_date)) < 60:
+            print(f"Using file date for {fileobj.abs_path} (which matches folder/filename date)")
+            return cdate
+        elif mdate and abs(daysbetween(mdate, filename_or_folder_date)) < 60:
+            print(f"Using metadata date for {fileobj.abs_path} (which matches folder/filename date)")
+            return mdate
         else:
-            change_creation_date = False
-            fileobj.updated_creation_date = fileobj.creation_date
-        fileobj.decided_date = datelogic(fileobj, need_folderdate_match, filedate_beats_metadadate, only_use_folderdate)
-        if fileobj.decided_date == False:
-            print ('Couldn\'t sort ' + abs_path + ' due to failing to get an accurate date')
-            fileobj.problem_path = '/Couldn\'t Sort/'
-            fileobj.new_basename = fileobj.basename
-            fileobj.new_rel_dir = fileobj.rel_dir + '/'
-        else:
-            if update_file_date:
-                fileobj.updated_creation_date = fileobj.decided_date
-            fileobj.update_meta_date = update_meta_date
-            fileobj.new_rel_dir = fileobj.decided_date[:7] + '/'
-            if rename:
-                if fileobj.camera_model == '':
-                    fileobj.new_basename = fileobj.decided_date
-                else:
-                    fileobj.new_basename = f'{fileobj.decided_date} - {fileobj.camera_model}'
+            # If we're forced to match folderdate but neither cdate nor mdate is close:
+            if need_folderdate_match:
+                print(f"Failed to get an accurate date for {fileobj.abs_path} because none agreed with folderdate")
+                return False
+            elif mdate and cdate and abs(daysbetween(cdate, mdate)) < 60:
+                print(f"Using file date for {fileobj.abs_path}, meta date was also close but does not match folder date")
+                return cdate
             else:
-                fileobj.new_basename = fileobj.basename
-        if movefiles:
-            finalfilepath = movefile(fileobj)
-            if finalfilepath is not False and change_creation_date:
-                set_creation_date(finalfilepath, fileobj.updated_creation_date)
+                print(f"Failed to get an accurate date for {fileobj.abs_path} because none agreed")
+                return False
+    else:
+        # Meta date has priority
+        if mdate and abs(daysbetween(mdate, filename_or_folder_date)) < 60:
+            print(f"Using metadata date for {fileobj.abs_path}, which matches folder/filename date")
+            return mdate
+        elif cdate and abs(daysbetween(cdate, filename_or_folder_date)) < 60:
+            print(f"Using file date for {fileobj.abs_path}, which matches folder/filename date")
+            return cdate
         else:
-            finalfilepath = copyfile(fileobj)
-            if finalfilepath is not False:
-                set_creation_date(finalfilepath, fileobj.updated_creation_date)
-    if gui_obj:
-        if finalfilepath:
+            if need_folderdate_match:
+                print(f"Failed to get an accurate date for {fileobj.abs_path} because none matched folderdate")
+                return False
+            elif mdate and cdate and abs(daysbetween(mdate, cdate)) < 60:
+                print(f"Using metadata date for {fileobj.abs_path} (it does not match folder date, but it's close to file date)")
+                return mdate
+            else:
+                print(f"Failed to get an accurate date for {fileobj.abs_path} because none of them agreed")
+                return False
+
+
+
+def processfile(
+    abs_path,
+    source_dir,
+    dest_dir,
+    gui_obj=None,
+    rename=False,
+    movefiles=False,
+    need_folderdate_match=False,
+    filedate_beats_metadadate=False,
+    update_file_date=False,
+    update_meta_date=False,
+    only_use_folderdate=False,
+    rename_folder=True,
+    known_year=None,
+    known_month=None
+):
+    if gui_obj and gui_obj.stop_event and gui_obj.stop_event.is_set():
+        return
+
+    print(f'Processing {abs_path}')
+
+    supported_extensions = (
+        '.jpg', '.jpeg', '.heic', '.mov',
+        '.png', '.mp4', '.m4v', '.mpg', '.avi'
+    )
+
+    fileobj = filemanager.get_file(abs_path, source_dir)
+    fileobj.dest_dir = dest_dir
+
+    is_supported = fileobj.extension in supported_extensions
+
+    # Determine fallback creation date
+    fileobj.updated_creation_date = (
+        fileobj.modified_date if daysbetween(fileobj.creation_date, fileobj.modified_date) < 0
+        else fileobj.creation_date
+    )
+
+    if not is_supported:
+        print(f"{abs_path} has an unsupported extension; placing in /Unsupported/")
+        fileobj.problem_path = '/Unsupported/'
+        fileobj.new_basename = fileobj.basename
+        fileobj.new_rel_dir = fileobj.rel_dir
+        finalfilepath = movefile(fileobj) if movefiles else copyfile(fileobj)
+        if gui_obj:
             with gui_obj.files_processed_lock:
                 gui_obj.files_processed += 1
-    #print ('Finished moving file to ' + newfilepath)
+        return  # Skip rest of processing
+
+    # Now run your existing date logic
+    fileobj.decided_date = datelogic(
+        fileobj,
+        need_folderdate_match,
+        filedate_beats_metadadate,
+        only_use_folderdate,
+        known_year=known_year,
+        known_month=known_month
+    )
+
+    # If no date found, place in "Couldn't Sort"
+    if fileobj.decided_date is False:
+        print("Couldn't sort " + abs_path + " due to failing to get an accurate date")
+        fileobj.problem_path = '/Couldn\'t Sort/'
+        fileobj.new_basename = fileobj.basename
+        # We still preserve original subfolders
+        fileobj.new_rel_dir = fileobj.rel_dir + '/'
+    else:
+        # Possibly update the file date
+        if update_file_date:
+            fileobj.updated_creation_date = fileobj.decided_date
+
+        # Possibly overwrite metadata
+        fileobj.update_meta_date = update_meta_date
+
+        # Decide subfolder name
+        if rename_folder and fileobj.decided_date:
+            # For example: YYYY-MM
+            fileobj.new_rel_dir = fileobj.decided_date[:7] + '/'
+        else:
+            # Keep original subfolder
+            fileobj.new_rel_dir = fileobj.rel_dir + '/'
+
+        # Rename file or not
+        if rename and fileobj.decided_date:
+            if fileobj.camera_model:
+                fileobj.new_basename = f"{fileobj.decided_date} - {fileobj.camera_model}"
+            else:
+                fileobj.new_basename = fileobj.decided_date
+        else:
+            fileobj.new_basename = fileobj.basename
+
+    if movefiles:
+        finalfilepath = movefile(fileobj)
+    else:
+        finalfilepath = copyfile(fileobj)
+
+    if gui_obj and finalfilepath:
+        with gui_obj.files_processed_lock:
+            gui_obj.files_processed += 1
 
 
-def bulkprocess(source_dir, dest, gui_obj=None, rename=False, movefiles=False, need_folderdate_match=False, filedate_beats_metadadate=False, update_file_date=False, update_meta_date=False, only_use_folderdate=False):
+
+def bulkprocess(
+    source_dir,
+    dest,
+    gui_obj=None,
+    rename_files=False,
+    movefiles=False,
+    need_folderdate_match=False,
+    filedate_beats_metadadate=False,
+    update_file_date=False,
+    update_meta_date=False,
+    only_use_folderdate=False,
+    rename_folders=True,
+    known_year=None,
+    known_month=None
+):
+    """
+      :param known_year:     int or None - only consider date fields that match this year
+      :param known_month:    int or None - only consider date fields that match this month
+    """
     t0 = time.time()
     listoffiles = get_list_of_files(source_dir)
     if gui_obj:
         gui_obj.total_files = len(listoffiles)
+
+    # Start concurrency
     with concurrent.futures.ThreadPoolExecutor(8) as executor:
-        futures = [executor.submit(processfile, abs_path, source_dir, dest, gui_obj, rename, movefiles, need_folderdate_match, filedate_beats_metadadate, update_file_date, update_meta_date, only_use_folderdate) for abs_path in listoffiles]
+        futures = [
+            executor.submit(
+                processfile,
+                abs_path,
+                source_dir,
+                dest,
+                gui_obj,
+                rename_files,
+                movefiles,
+                need_folderdate_match,
+                filedate_beats_metadadate,
+                update_file_date,
+                update_meta_date,
+                only_use_folderdate,
+                rename_folders,
+                known_year,
+                known_month
+            )
+            for abs_path in listoffiles
+        ]
+
         for future in concurrent.futures.as_completed(futures):
-            if gui_obj.stop_event and gui_obj.stop_event.is_set():
+            if gui_obj and gui_obj.stop_event and gui_obj.stop_event.is_set():
                 print('\nStarting shut down of ThreadPoolExecutor...\n')
                 executor.shutdown(wait=False, cancel_futures=True)
-            break
+                break
+
     t1 = time.time()
-    totaltime = t1-t0
-    totaltime = round(totaltime)
-    if gui_obj.stop_event and gui_obj.stop_event.is_set():
+    totaltime = round(t1 - t0)
+
+    if gui_obj and gui_obj.stop_event and gui_obj.stop_event.is_set():
         print('\nStopped by user after ' + str(totaltime) + ' seconds')
     else:
         print('\nFinished in ' + str(totaltime) + ' seconds')
 
-    if gui_obj.finish_event:
+    if gui_obj and gui_obj.finish_event:
         gui_obj.finish_event.set()  # Indicate that the process has completed
+
 
 
 def fixcreationdate(path, source_dir):
@@ -1014,16 +1179,12 @@ def mirror_cdate_to_video_files(source_dir, dest_dir, folder_depth=1):
             print(f"File {dest_fileobj.rel_path} does not exist in source directory.")
 
 
+filemanager = FileManager()
 if __name__ == "__main__":
     print('###############START###############')
     print('\n')
     #Test things
-    #edit_metadata(r'/Users/James/Desktop/IMG-20211017-WA0000.jpg', "DateTimeOriginal", "2024:02:19 12:00:00")
-    #print(get_metadata([r'/Users/James/Desktop/dest/2024-02/IMG_0893 21.27.16.JPG']))
-    #change_extension_case(r'C:\Users\james\Desktop\test', 'u')
-    #mirror_cdate_to_video_files(r'G:\Game Recordings\Apex Legends', r'G:\Game Recordings\Apex Legends\Re-encoded')
-    #print(get_metadata([r'C:\Users\james\Desktop\dest\Apex Legends 2021.05.24 - 22.09.02.17.Dvr.mp4']))
-    bulkfixcreationdates(r'C:\Users\james\Desktop\Camera Rolls')
+
     print('All done!')
 
 
