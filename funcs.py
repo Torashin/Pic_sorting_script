@@ -919,12 +919,12 @@ def compare_exif(fileobj1, fileobj2, filetype):
         if value1 is None and value2 is None:
             missing_keys.add(key)
         elif value1 is None:
-            if key == 'EXIF:DateTimeOriginal':
+            if key == 'EXIF:DateTimeOriginal' and fileobj1.decided_date:
                 value1 = fileobj1.decided_date.replace("-", ":")
             else:
                 return 'missing'
         elif value2 is None:
-            if key == 'EXIF:DateTimeOriginal':
+            if key == 'EXIF:DateTimeOriginal' and fileobj2.decided_date:
                 value2 = fileobj2.decided_date.replace("-", ":")
             else:
                 return 'missing'
