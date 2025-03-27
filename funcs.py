@@ -68,18 +68,26 @@ class FileManager:
     def __init__(self):
         self.file_objects_dict = {}
 
-    def add_file(self, abs_path, base_dir=None, is_in_dest=False):
+    def add_file(self, abs_path, base_dir=None, is_in_dest=False, known_year=None, known_month=None):
         if abs_path not in self.file_objects_dict:
-            self.file_objects_dict[abs_path] = FileObject(abs_path, base_dir, is_in_dest)
+            self.file_objects_dict[abs_path] = FileObject(abs_path, base_dir, is_in_dest, known_year, known_month)
 
-    def get_file(self, abs_path, base_dir=None, is_in_dest=False):
+    def get_file(self, abs_path, base_dir=None, is_in_dest=False, known_year=None, known_month=None):
         if abs_path not in self.file_objects_dict:
             print(f"Creating FileObject for {abs_path}")
-            self.add_file(abs_path, base_dir, is_in_dest)
+            self.add_file(abs_path, base_dir, is_in_dest, known_year, known_month)
         return self.file_objects_dict.get(abs_path)
 
 class FileObject:
-    def __init__(self, abs_path, base_dir=None, is_in_dest=False):
+    def __init__(
+            self,
+            abs_path: str,
+            base_dir: str | None = None,
+            is_in_dest: bool = False,
+            known_year: int | None = None,
+            known_month: int | None = None
+    ):
+
         self.base_dir = base_dir
         self.abs_path = abs_path
         self.abs_dir, self.filename = os.path.split(abs_path)
@@ -103,6 +111,8 @@ class FileObject:
         self.new_rel_dir = None
         self.problem_path = '/'
         self.update_meta_date = False
+        self.known_year = known_year
+        self.known_month = known_month
         self.is_in_dest = is_in_dest
         if is_in_dest:
             self.dest_dir = base_dir
@@ -278,7 +288,12 @@ class FileObject:
     @property
     def image_hash(self):
         if not self._image_hash:
-            self._image_hash = imagehash.average_hash(self.abs_path)
+            try:
+                with Image.open(self.abs_path) as img:  # Open the image file
+                    self._image_hash = imagehash.average_hash(img)  # Pass the Image object
+            except Exception as e:
+                print(f"Error processing image hash for {self.abs_path}: {e}")
+                self._image_hash = None  # Handle errors gracefully
         return self._image_hash
 
 
@@ -385,9 +400,8 @@ def movefile(fileobj, duplicate_check=True):
         pathlib.Path(fileobj.dest_dir + fileobj.problem_path + fileobj.new_rel_dir).mkdir(parents=True, exist_ok=True)
         existing_file_path = case_insensitive_exists(fileobj.new_abs_path)
         if existing_file_path:
-            if duplicate_check and fileobj.problem_path != '/Duplicates/' and are_duplicates_OS_dependent(fileobj, filemanager.get_file(existing_file_path, fileobj.dest_dir, is_in_dest=True)):
-                print(
-                    f'{fileobj.abs_path} has been recognised as a duplicate of {existing_file_path}')
+            if duplicate_check and are_duplicates_OS_dependent(fileobj.abs_path, existing_file_path) and fileobj.problem_path != '/Duplicates/':
+                print(f'{fileobj.abs_path} has been recognised as a duplicate of {existing_file_path}')
                 fileobj.problem_path = '/Duplicates/'
             else:
                 fileobj.new_basename = f'{desired_basename} ({n})'
@@ -420,12 +434,15 @@ def set_creation_date(file, newcdate):
 
 
 def daysbetween(d1, d2):
-    # earlier date goes first
-    d1 = datetime.strptime(d1, "%Y-%m-%d %H-%M-%S")
-    d2 = datetime.strptime(d2, "%Y-%m-%d %H-%M-%S")
-    secondsapart = (d2 - d1).total_seconds()
-    daysapart = secondsapart / 86400
-    return daysapart
+    # earlier date goes first to return positive number
+    try:
+        d1 = datetime.strptime(d1, "%Y-%m-%d %H-%M-%S")
+        d2 = datetime.strptime(d2, "%Y-%m-%d %H-%M-%S")
+        secondsapart = (d2 - d1).total_seconds()
+        daysapart = secondsapart / 86400
+        return daysapart
+    except:
+        return 9999
 
 
 def secondsbetween(d1, d2):
@@ -452,7 +469,7 @@ def analyse_date(date_input):
     # checks if string is a date and if so returns it in standard format
     try:
         # noinspection PyTypeChecker
-        date_as_list = list(datefinder.find_dates(date_input, base_date=datetime(2000, 1, 15)))
+        date_as_list = list(datefinder.find_dates(date_input, base_date=datetime(2000, 1, 1)))
         if len(date_as_list) != 1:
             # Found zero or multiple dates
             return False
@@ -475,16 +492,14 @@ def get_list_of_files(directory, folder_depth=None):
         depth = root[len(directory) + len(os.path.sep):].count(os.path.sep)
         if folder_depth is None or depth <= folder_depth:
             for file in files:
-                all_files.append(os.path.join(root, file))
+                all_files.append(os.path.normpath(os.path.join(root, file)))
     return all_files
 
 def datelogic(
     fileobj,
     need_folderdate_match,
-    filedate_beats_metadadata,
+    cdate_beats_mdate,
     only_use_folderdate,
-    known_year=None,
-    known_month=None
 ):
     """
     Decide which date to adopt, prioritizing folder/filename/meta/file date
@@ -498,6 +513,8 @@ def datelogic(
     mdate = fileobj.meta_date
     fdate = fileobj.filename_date
     flddate = fileobj.folder_date
+    known_year = fileobj.known_year
+    known_month = fileobj.known_month
 
     # A helper to check if a date string "YYYY-MM-DD HH-MM-SS" matches known year/month
     def matches_year_month(date_str):
@@ -525,7 +542,7 @@ def datelogic(
     if not matches_year_month(flddate):
         flddate = False
 
-    # Now we do the original day-difference-based picking logic exactly as before:
+    # Now the main logic:
 
     # First, see if we can unify folder_date and filename_date:
     filename_or_folder_date = None
@@ -547,30 +564,36 @@ def datelogic(
             print(f"Failed to get folder date for {fileobj.abs_path}, - not allowed to proceed (need_folderdate_match=True)")
             return False
         else:
-            # Fallback to meta_date or file_date
-            if mdate:
-                # If meta_date is close to file date, pick whichever has priority
-                if cdate and abs(daysbetween(cdate, mdate)) < 60:
-                    if filedate_beats_metadadata:
-                        return cdate
-                    else:
-                        return mdate
-                else:
-                    # If only meta_date is valid
-                    return mdate
-            elif cdate:
+            # If meta_date is close to file date, pick whichever has priority
+            days_mdate_to_cdate = daysbetween(mdate, cdate)
+            if days_mdate_to_cdate < 0:        # cdate is earlier than mdate
                 return cdate
+            elif days_mdate_to_cdate < 62:    # mdate is less than 62 days before cdate
+                    return mdate
+            # mdate is more than 62 days before cdate
+            elif known_year:
+                if cdate_beats_mdate or not mdate:
+                    return cdate
+                else:
+                    return mdate
             else:
                 print(f"Failed to get folder date and metadata date for {fileobj.abs_path}")
                 return False
 
     # If we have some folder/filename date:
-    if filedate_beats_metadadata:
-        # Check if cdate is close (within 60 days) to folder/filename date
-        if cdate and abs(daysbetween(cdate, filename_or_folder_date)) < 60:
+    days_mdate_to_cdate = daysbetween(mdate, cdate)                         # If negative, cdate is earlier than mdate.
+    days_c_to_f_or_f_date = daysbetween(cdate, filename_or_folder_date)     # If negative, filename_or_folder_date is earlier than cdate.
+    days_m_to_f_or_f_date = daysbetween(mdate, filename_or_folder_date)     # If negative, filename_or_folder_date is earlier than mdate.
+
+    if days_mdate_to_cdate < 0:
+        cdate_beats_mdate = True
+
+    if cdate_beats_mdate:
+        # Check if cdate is close (within 62 days) to folder/filename date
+        if abs(days_c_to_f_or_f_date) < 62:
             print(f"Using file date for {fileobj.abs_path} (which matches folder/filename date)")
             return cdate
-        elif mdate and abs(daysbetween(mdate, filename_or_folder_date)) < 60:
+        elif abs(days_m_to_f_or_f_date) < 62:
             print(f"Using metadata date for {fileobj.abs_path} (which matches folder/filename date)")
             return mdate
         else:
@@ -578,26 +601,26 @@ def datelogic(
             if need_folderdate_match:
                 print(f"Failed to get an accurate date for {fileobj.abs_path} because none agreed with folderdate")
                 return False
-            elif mdate and cdate and abs(daysbetween(cdate, mdate)) < 60:
-                print(f"Using file date for {fileobj.abs_path}, meta date was also close but does not match folder date")
+            elif abs(days_mdate_to_cdate) < 62:
+                print(f"Using file date for {fileobj.abs_path} (it does not match folder date, but is close to meta date)")
                 return cdate
             else:
                 print(f"Failed to get an accurate date for {fileobj.abs_path} because none agreed")
                 return False
     else:
         # Meta date has priority
-        if mdate and abs(daysbetween(mdate, filename_or_folder_date)) < 60:
+        if mdate and abs(days_m_to_f_or_f_date) < 62:
             print(f"Using metadata date for {fileobj.abs_path}, which matches folder/filename date")
             return mdate
-        elif cdate and abs(daysbetween(cdate, filename_or_folder_date)) < 60:
+        elif cdate and abs(days_c_to_f_or_f_date) < 62:
             print(f"Using file date for {fileobj.abs_path}, which matches folder/filename date")
             return cdate
         else:
             if need_folderdate_match:
                 print(f"Failed to get an accurate date for {fileobj.abs_path} because none matched folderdate")
                 return False
-            elif mdate and cdate and abs(daysbetween(mdate, cdate)) < 60:
-                print(f"Using metadata date for {fileobj.abs_path} (it does not match folder date, but it's close to file date)")
+            elif abs(days_mdate_to_cdate) < 62:
+                print(f"Using metadata date for {fileobj.abs_path} (it does not match folder date, but is close to file date)")
                 return mdate
             else:
                 print(f"Failed to get an accurate date for {fileobj.abs_path} because none of them agreed")
@@ -631,7 +654,7 @@ def processfile(
         '.png', '.mp4', '.m4v', '.mpg', '.avi'
     )
 
-    fileobj = filemanager.get_file(abs_path, source_dir)
+    fileobj = filemanager.get_file(abs_path, source_dir, known_year=known_year, known_month=known_month)
     fileobj.dest_dir = dest_dir
 
     is_supported = fileobj.extension in supported_extensions
@@ -658,9 +681,7 @@ def processfile(
         fileobj,
         need_folderdate_match,
         filedate_beats_metadadate,
-        only_use_folderdate,
-        known_year=known_year,
-        known_month=known_month
+        only_use_folderdate
     )
 
     # If no date found, place in "Couldn't Sort"
@@ -753,7 +774,15 @@ def bulkprocess(
             for abs_path in listoffiles
         ]
 
+        # Iterate over completed futures and print exceptions if any
         for future in concurrent.futures.as_completed(futures):
+            try:
+                # This will re-raise any exception that occurred in the worker
+                future.result()
+            except Exception as e:
+                print(f"Error processing file: {e}")
+
+            # Check for early stop signal
             if gui_obj and gui_obj.stop_event and gui_obj.stop_event.is_set():
                 print('\nStarting shut down of ThreadPoolExecutor...\n')
                 executor.shutdown(wait=False, cancel_futures=True)
@@ -859,11 +888,11 @@ def convert_heic_to_jpeg(orig_file_path, jpeg_path, quality=90):
     try:
         dir = os.path.split(orig_file_path)[0]
         origfileobj = filemanager.get_file(orig_file_path, dir)
-        img = Image.open(orig_file_path)
-        icc_profile = img.info.get('icc_profile')
-        exif_data = img.getexif()
-        # Save the image with appropriate parameters
-        img.save(jpeg_path, format='JPEG', quality=quality, icc_profile=icc_profile, exif=exif_data)
+        with Image.open(orig_file_path) as img:  # Open the image file
+            icc_profile = img.info.get('icc_profile')
+            exif_data = img.getexif()
+            # Save the image with appropriate parameters
+            img.save(jpeg_path, format='JPEG', quality=quality, icc_profile=icc_profile, exif=exif_data)
         set_creation_date(jpeg_path, origfileobj.creation_date)
     except Exception as e:
         raise RuntimeError(f'Conversion failed with error: {str(e)}')
@@ -886,19 +915,32 @@ def compare_exif(fileobj1, fileobj2, filetype):
             value2 = metadata2.get(key)
         except Exception as e:
                 print(f"An error occurred: {e}")
+                return None
         if value1 is None and value2 is None:
             missing_keys.add(key)
-        elif value1 is None or value2 is None:
-            return 'missing'
+        elif value1 is None:
+            if key == 'EXIF:DateTimeOriginal':
+                value1 = fileobj1.decided_date.replace("-", ":")
+            else:
+                return 'missing'
+        elif value2 is None:
+            if key == 'EXIF:DateTimeOriginal':
+                value2 = fileobj2.decided_date.replace("-", ":")
+            else:
+                return 'missing'
         if is_numeric(value1) and is_numeric(value2):
             value1 = round(float(value1), 5)
             value2 = round(float(value2), 5)
         if value1 != value2:
             if (key == 'EXIF:ExifImageWidth' or key == 'EXIF:ExifImageHeight') and metadata1.get('EXIF:Orientation') != metadata2.get('EXIF:Orientation'):
                 pass
-            if key == 'EXIF:DateTimeOriginal' and abs(secondsbetween(value1, value2)) <= 1:
-                print('Meta dates are very slightly different - assuming to be the same')
-                pass
+            elif key == 'EXIF:DateTimeOriginal':
+                if abs(secondsbetween(value1, value2)) <= 1:
+                    print('Meta dates are very slightly different - assuming to be the same')
+                    pass
+                elif fileobj1.decided_date.replace("-", ":") == value2 or fileobj2.decided_date.replace("-", ":") == value1:
+                    print('Decided date matches date taken')
+                    pass
             else:
                 return 'different'
     if len(missing_keys) == len(meta_tags):
