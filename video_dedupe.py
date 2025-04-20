@@ -6,6 +6,7 @@ import atexit
 import time
 from pathlib import Path
 from typing import List, Tuple, Dict
+import concurrent.futures
 
 import numpy as np
 import pandas as pd
@@ -23,14 +24,14 @@ from pandas import ExcelWriter
 VIDEO_HASH_STORE_PATH     = "video_hashes.json"
 VIDEO_DEDUPE_REPORT_PATH  = "video_duplicates.xlsx"
 
-MAX_SAMPLES              = 20      # key‑frame sample count per video
-FAISS_THRESHOLD          = 12      # raw L2 on 64‑bit super‑hash (0–64)
-ALIGN_THRESHOLD          = 10.0    # raw mean Hamming (0–64)
-ALIGN_OFFSET_LIMIT_S     = 60.0    # max time offset for alignment (seconds)
-TOP_K                    = 5
-EXTS                     = {'.mp4', '.mov', '.avi', '.m4v', '.mpg', '.mkv'}
-
-SAVE_EVERY              = 5       # save cache every N new entries
+MAX_SAMPLES               = 20      # key‑frame sample count per video
+FAISS_THRESHOLD           = 12      # raw L2 on 64‑bit super‑hash
+ALIGN_THRESHOLD           = 10.0    # raw mean Hamming
+ALIGN_OFFSET_LIMIT_S      = 60.0    # max time offset for alignment (seconds)
+TOP_K                     = 5
+EXTS                      = {'.mp4', '.mov', '.avi', '.m4v', '.mpg', '.mkv'}
+SAVE_EVERY                = 5       # save cache every N new entries
+MAX_WORKERS               = 2       # threads for hashing/metadata
 
 # ────────────────────────────────────────────────────────────────────
 # Helpers
@@ -43,9 +44,6 @@ def _hex_to_vec(hex_str: str) -> np.ndarray:
 
 
 def _sample_hashes_with_times(path: str, k: int = MAX_SAMPLES) -> List[Tuple[str, float]]:
-    """
-    Sample up to k frame pHashes evenly, returning (hex, time_s).
-    """
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {path}")
@@ -71,7 +69,6 @@ def _sample_hashes_with_times(path: str, k: int = MAX_SAMPLES) -> List[Tuple[str
 
 
 def _average_hex(pairs: List[Tuple[str, float]]) -> str:
-    """Average the hex hashes (ignore times)."""
     hexes = [h for (h, _) in pairs]
     if not hexes:
         return "0" * 16
@@ -82,7 +79,6 @@ def _average_hex(pairs: List[Tuple[str, float]]) -> str:
 
 
 def _hamming(a: str, b: str) -> int:
-    """Hamming distance between two 64‑bit hex strings."""
     return bin(int(a, 16) ^ int(b, 16)).count("1")
 
 
@@ -92,12 +88,6 @@ def _aligned_distance_and_time_limited(
     max_shift_samples: int,
     offset_limit_s: float
 ) -> Tuple[float, float]:
-    """
-    Slide seq_a over seq_b within ±max_shift_samples,
-    compute mean Hamming and mean time shift,
-    consider only pairs with |ts| ≤ offset_limit_s.
-    Returns (best_mean_hamming, best_time_shift_s).
-    """
     if not seq_a or not seq_b:
         return 64.0, 0.0
 
@@ -108,8 +98,7 @@ def _aligned_distance_and_time_limited(
     max_shift = min(L1 - 1, max_shift_samples)
 
     for shift in range(min_shift, max_shift + 1):
-        dists = []
-        ts_list = []
+        dists, ts_list = [], []
         for i, (ha, ta) in enumerate(seq_a):
             j = i - shift
             if 0 <= j < L2:
@@ -129,13 +118,6 @@ def _aligned_distance_and_time_limited(
 # Persistent cache
 # ────────────────────────────────────────────────────────────────────
 class VideoHashStore:
-    """
-    Caches per-file:
-      • mtime
-      • avg: hex of super‑hash
-      • seq: list of (hex, time_s)
-    Persists to VIDEO_HASH_STORE_PATH.
-    """
     _inst = None
 
     def __new__(cls, path=VIDEO_HASH_STORE_PATH):
@@ -158,11 +140,7 @@ class VideoHashStore:
         mtime = os.path.getmtime(filepath)
         entry = self._data.get(filepath)
         if not entry or entry.get("mtime") != mtime:
-            try:
-                seq_pairs = _sample_hashes_with_times(filepath)
-            except Exception as e:
-                print(f"[HashStore] ERROR hashing {filepath}: {e}", flush=True)
-                raise
+            seq_pairs = _sample_hashes_with_times(filepath)
             avg_hex    = _average_hex(seq_pairs)
             self._data[filepath] = {"mtime": mtime, "avg": avg_hex, "seq": seq_pairs}
             self._dirty = True
@@ -183,6 +161,24 @@ class VideoHashStore:
             print(f"[HashStore] cache saved ({len(self._data)} items)", flush=True)
 
 # ────────────────────────────────────────────────────────────────────
+# Worker for metadata + hashing
+# ────────────────────────────────────────────────────────────────────
+def _process_video(path_fid):
+    path, fid = path_fid
+    try:
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            return None
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        cnt = cap.get(cv2.CAP_PROP_FRAME_COUNT) or MAX_SAMPLES
+        cap.release()
+        avg_hex, seq = VideoHashStore().get(path)
+        return (path, fid, fps, cnt, avg_hex, seq)
+    except Exception as e:
+        print(f"[find_video_duplicates] ERROR processing {path}: {e}", flush=True)
+        return None
+
+# ────────────────────────────────────────────────────────────────────
 # Main dedupe pipeline
 # ────────────────────────────────────────────────────────────────────
 def find_video_duplicates(
@@ -199,46 +195,43 @@ def find_video_duplicates(
     print(f"[find_video_duplicates] Start {time.strftime('%H:%M:%S')}", flush=True)
     from funcs import get_list_of_files
 
-    video_paths, folder_ids, durations = [], [], []
-    store = VideoHashStore()
-
-    # gather files + durations
+    # gather and filter files
+    all_tasks = []
     for fid, folder in enumerate(directories):
         all_files = get_list_of_files(folder)
         print(f"[find_video_duplicates] Folder {fid}: {folder} → {len(all_files)} files", flush=True)
         video_paths = [f for f in all_files
-                 if Path(f).suffix.lower() in EXTS
-                 and '_gsdata_' not in f
-                 and not Path(f).name.startswith("._")]
-        print(f"[find_video_duplicates] Folder {fid}: {folder} → {len(video_paths)} video files", flush=True)
-        for p in video_paths:
-            q = Path(p)
-            if q.suffix.lower() not in EXTS or q.name.startswith("._"):
-                continue
-            cap = cv2.VideoCapture(str(q))
-            if not cap.isOpened():
-                print(f"[find_video_duplicates] Skipping unreadable: {q}", flush=True)
-                continue
-            fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            cnt  = cap.get(cv2.CAP_PROP_FRAME_COUNT) or MAX_SAMPLES
-            cap.release()
-            video_paths.append(str(q))
-            folder_ids.append(fid)
-            durations.append(cnt / fps)
+                       if Path(f).suffix.lower() in EXTS
+                       and '_gsdata_' not in f
+                       and not Path(f).name.startswith("._")]
+        print(f"[find_video_duplicates] → {len(video_paths)} video files", flush=True)
+        all_tasks += [(p, fid) for p in video_paths]
 
-    vecs, seqs = [], []
-    for p in video_paths:
-        try:
-            avg_hex, seq_pairs = store.get(p)
-        except RuntimeError:
-            continue
-        vecs.append(_hex_to_vec(avg_hex))
-        seqs.append(seq_pairs)
+    # parallel processing
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as exec:
+        futures = {exec.submit(_process_video, t): t for t in all_tasks}
+        for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
+            res = fut.result()
+            if res:
+                results.append(res)
+            if i % 100 == 0 or i==len(futures):
+                print(f"[find_video_duplicates] Processed {i}/{len(futures)} videos", flush=True)
 
-    if not vecs:
-        print("⚠️  No videos found.", flush=True)
+    if not results:
+        print("⚠️  No readable videos found.", flush=True)
         return pd.DataFrame()
 
+    # unpack metadata
+    paths, folder_ids, durations, vecs, seqs = [], [], [], [], []
+    for path, fid, fps, cnt, avg_hex, seq in results:
+        paths.append(path)
+        folder_ids.append(fid)
+        durations.append(cnt / fps)
+        vecs.append(_hex_to_vec(avg_hex))
+        seqs.append(seq)
+
+    # FAISS index
     print(f"[find_video_duplicates] {len(vecs)} videos hashed, building FAISS index...", flush=True)
     mat = np.stack(vecs).astype("float32")
     index = faiss.IndexFlatL2(mat.shape[1])
@@ -246,10 +239,10 @@ def find_video_duplicates(
         res   = faiss.StandardGpuResources()
         index = faiss.index_cpu_to_gpu(res, 0, index)
     index.add(mat)
-
-    D, I = index.search(mat, top_k + 1)
+    D, I = index.search(mat, top_k+1)
     print(f"[find_video_duplicates] FAISS search done", flush=True)
 
+    # refine pairs
     raw_pairs = set()
     for i, (drow, idxrow) in enumerate(zip(D, I)):
         for dist, j in zip(drow, idxrow):
@@ -269,7 +262,7 @@ def find_video_duplicates(
         idx = np.where(I[i]==j)[0]
         avg_d = float(D[i][idx[0]]) if idx.size else float(((vecs[i]-vecs[j])**2).sum())
         results.append({
-            "file_a":video_paths[i], "file_b":video_paths[j],
+            "file_a":paths[i], "file_b":paths[j],
             "avg_frame_diff (0–64)":avg_d,
             "best_aligned_diff (0–64)":best_h,
             "time_shift_s":best_ts,
@@ -294,9 +287,6 @@ def _export_excel(df: pd.DataFrame, path: str):
         for idx, col in enumerate(df.columns, start=1):
             max_len = df[col].astype(str).map(len).max() if not df.empty else 0
             width = max(len(col), max_len)+2
-            ws.column_dimensions[get_column_letter(idx)].width=width
-            if col=="aligned_pct_diff (0–100%)":
-                fmt=numbers.FORMAT_PERCENTAGE_00
-            else:
-                fmt=numbers.FORMAT_NUMBER_00
+            ws.column_dimensions[get_column_letter(idx)].width = width
+            fmt = numbers.FORMAT_PERCENTAGE_00 if col=="aligned_pct_diff (0–100%)" else numbers.FORMAT_NUMBER_00
             for cell in ws[get_column_letter(idx)][1:]: cell.number_format = fmt
