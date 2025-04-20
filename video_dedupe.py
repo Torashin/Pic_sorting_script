@@ -199,7 +199,7 @@ def find_video_duplicates(
     print(f"[find_video_duplicates] Start {time.strftime('%H:%M:%S')}", flush=True)
     from funcs import get_list_of_files
 
-    paths, folder_ids, durations = [], [], []
+    video_paths, folder_ids, durations = [], [], []
     store = VideoHashStore()
 
     # gather files + durations
@@ -222,12 +222,12 @@ def find_video_duplicates(
             fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
             cnt  = cap.get(cv2.CAP_PROP_FRAME_COUNT) or MAX_SAMPLES
             cap.release()
-            paths.append(str(q))
+            video_paths.append(str(q))
             folder_ids.append(fid)
             durations.append(cnt / fps)
 
     vecs, seqs = [], []
-    for p in paths:
+    for p in video_paths:
         try:
             avg_hex, seq_pairs = store.get(p)
         except RuntimeError:
@@ -269,7 +269,7 @@ def find_video_duplicates(
         idx = np.where(I[i]==j)[0]
         avg_d = float(D[i][idx[0]]) if idx.size else float(((vecs[i]-vecs[j])**2).sum())
         results.append({
-            "file_a":paths[i], "file_b":paths[j],
+            "file_a":video_paths[i], "file_b":video_paths[j],
             "avg_frame_diff (0–64)":avg_d,
             "best_aligned_diff (0–64)":best_h,
             "time_shift_s":best_ts,
