@@ -19,6 +19,12 @@ from openpyxl.styles import Font, numbers
 from pandas import ExcelWriter
 
 # ────────────────────────────────────────────────────────────────────
+# Progress Counters (shared between hashing and duplicate finder)
+# ────────────────────────────────────────────────────────────────────
+TOTAL_VIDEOS = 0
+PROCESSED_VIDEOS = 0
+
+# ────────────────────────────────────────────────────────────────────
 # Configuration
 # ────────────────────────────────────────────────────────────────────
 VIDEO_HASH_STORE_PATH     = "video_hashes.json"
@@ -137,6 +143,7 @@ class VideoHashStore:
         atexit.register(self.save_if_dirty)
 
     def get(self, filepath: str) -> Tuple[str, List[Tuple[str, float]]]:
+        global PROCESSED_VIDEOS, TOTAL_VIDEOS
         mtime = os.path.getmtime(filepath)
         entry = self._data.get(filepath)
         if not entry or entry.get("mtime") != mtime:
@@ -149,7 +156,11 @@ class VideoHashStore:
             if self._new_count >= SAVE_EVERY:
                 self.save_if_dirty()
                 self._new_count = 0
+                pct = (PROCESSED_VIDEOS / TOTAL_VIDEOS * 100) if TOTAL_VIDEOS else 0
+                print(f"[find_video_duplicates] Saved {PROCESSED_VIDEOS}/{TOTAL_VIDEOS} videos to JSON ({pct:.1f}%)")
+            PROCESSED_VIDEOS += 1
             return avg_hex, seq_pairs
+        PROCESSED_VIDEOS += 1
         print(f"[HashStore] CACHE {Path(filepath).name}", flush=True)
         return entry["avg"], entry["seq"]
 
@@ -204,7 +215,10 @@ def find_video_duplicates(
                        if Path(f).suffix.lower() in EXTS
                        and '_gsdata_' not in f
                        and not Path(f).name.startswith("._")]
-        print(f"[find_video_duplicates] → {len(video_paths)} video files", flush=True)
+        total_videos = len(video_paths)
+        global TOTAL_VIDEOS
+        TOTAL_VIDEOS = total_videos
+        print(f"[find_video_duplicates] → {total_videos} video files", flush=True)
         all_tasks += [(p, fid) for p in video_paths]
 
     # parallel processing
