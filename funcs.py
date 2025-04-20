@@ -105,6 +105,8 @@ class FileObject:
         self._camera_model = None
         self._metadata = None
         self._image_hash = None
+        self._video_hash = None
+        self._video_seq_hash = None
         self.decided_date = None
         self.new_basename = None
         self.new_filename = None
@@ -295,6 +297,21 @@ class FileObject:
                 print(f"Error processing image hash for {self.abs_path}: {e}")
                 self._image_hash = None  # Handle errors gracefully
         return self._image_hash
+
+    @property
+    def video_hash(self):
+        if self._video_hash is None:
+            # local import avoids NameError and circularity
+            from video_dedupe import VideoHashStore
+            self._video_hash = VideoHashStore().get_avg_hash(self.abs_path)
+        return self._video_hash
+
+    @property
+    def video_seq_hash(self):
+        if self._video_seq_hash is None:
+            from video_dedupe import VideoHashStore
+            self._video_seq_hash = VideoHashStore().get_seq_hash(self.abs_path)
+        return self._video_seq_hash
 
 
 def get_metadata(files):
@@ -1222,9 +1239,9 @@ def mirror_cdate_to_video_files(source_dir, dest_dir, folder_depth=1):
 
 
 filemanager = FileManager()
+
 if __name__ == "__main__":
     print('###############START###############')
-    print('\n')
     #Test things
 
     print('All done!')
