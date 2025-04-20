@@ -24,12 +24,13 @@ VIDEO_HASH_STORE_PATH     = "video_hashes.json"
 VIDEO_DEDUPE_REPORT_PATH  = "video_duplicates.xlsx"
 
 MAX_SAMPLES              = 20      # key‑frame sample count per video
-FAISS_THRESHOLD          = 12     # raw L2 on 64‑bit super‑hash (0–64)
+FAISS_THRESHOLD          = 12      # raw L2 on 64‑bit super‑hash (0–64)
 ALIGN_THRESHOLD          = 10.0    # raw mean Hamming (0–64)
 ALIGN_OFFSET_LIMIT_S     = 60.0    # max time offset for alignment (seconds)
 TOP_K                    = 5
 EXTS                     = {'.mp4', '.mov', '.avi', '.m4v', '.mpg', '.mkv'}
 
+SAVE_EVERY              = 5       # save cache every N new entries
 
 # ────────────────────────────────────────────────────────────────────
 # Helpers
@@ -92,24 +93,23 @@ def _aligned_distance_and_time_limited(
     offset_limit_s: float
 ) -> Tuple[float, float]:
     """
-    Slide seq_a over seq_b within ±max_shift_samples (in sample indices),
-    compute mean Hamming and corresponding mean time shift,
-    but only consider pairs whose time shift ≤ offset_limit_s.
+    Slide seq_a over seq_b within ±max_shift_samples,
+    compute mean Hamming and mean time shift,
+    consider only pairs with |ts| ≤ offset_limit_s.
     Returns (best_mean_hamming, best_time_shift_s).
     """
     if not seq_a or not seq_b:
         return 64.0, 0.0
 
-    L1, L2 = len(seq_a), len(seq_b)
     best_dist = 64.0
     best_time_shift = 0.0
-
+    L1, L2 = len(seq_a), len(seq_b)
     min_shift = max(-(L2 - 1), -max_shift_samples)
     max_shift = min(L1 - 1, max_shift_samples)
 
     for shift in range(min_shift, max_shift + 1):
         dists = []
-        time_shifts = []
+        ts_list = []
         for i, (ha, ta) in enumerate(seq_a):
             j = i - shift
             if 0 <= j < L2:
@@ -117,14 +117,13 @@ def _aligned_distance_and_time_limited(
                 ts = tb - ta
                 if abs(ts) <= offset_limit_s:
                     dists.append(_hamming(ha, hb))
-                    time_shifts.append(ts)
+                    ts_list.append(ts)
         if dists:
-            mean_dist = sum(dists) / len(dists)
-            if mean_dist < best_dist:
-                best_dist = mean_dist
-                best_time_shift = sum(time_shifts) / len(time_shifts)
+            mean_d = sum(dists) / len(dists)
+            if mean_d < best_dist:
+                best_dist = mean_d
+                best_time_shift = sum(ts_list) / len(ts_list)
     return best_dist, best_time_shift
-
 
 # ────────────────────────────────────────────────────────────────────
 # Persistent cache
@@ -149,26 +148,31 @@ class VideoHashStore:
         self.path = path
         self._data: Dict[str, Dict] = {}
         self._dirty = False
+        self._new_count = 0
         if os.path.exists(path):
             with open(path) as f:
                 self._data = json.load(f)
         atexit.register(self.save_if_dirty)
 
     def get(self, filepath: str) -> Tuple[str, List[Tuple[str, float]]]:
-        """
-        Return (avg_hex, seq_pairs), computing if missing or file changed.
-        seq_pairs is List of (hash_hex, time_s).
-        """
         mtime = os.path.getmtime(filepath)
         entry = self._data.get(filepath)
         if not entry or entry.get("mtime") != mtime:
-            seq_pairs = _sample_hashes_with_times(filepath)
+            try:
+                seq_pairs = _sample_hashes_with_times(filepath)
+            except Exception as e:
+                print(f"[HashStore] ERROR hashing {filepath}: {e}", flush=True)
+                raise
             avg_hex    = _average_hex(seq_pairs)
             self._data[filepath] = {"mtime": mtime, "avg": avg_hex, "seq": seq_pairs}
             self._dirty = True
-            print(f"[HashStore] NEW {Path(filepath).name} ({len(seq_pairs)} samples)")
+            self._new_count += 1
+            print(f"[HashStore] NEW {Path(filepath).name} ({len(seq_pairs)} samples)", flush=True)
+            if self._new_count >= SAVE_EVERY:
+                self.save_if_dirty()
+                self._new_count = 0
             return avg_hex, seq_pairs
-        print(f"[HashStore] CACHE {Path(filepath).name}")
+        print(f"[HashStore] CACHE {Path(filepath).name}", flush=True)
         return entry["avg"], entry["seq"]
 
     def save_if_dirty(self):
@@ -176,7 +180,7 @@ class VideoHashStore:
             with open(self.path, "w") as f:
                 json.dump(self._data, f, indent=2)
             self._dirty = False
-
+            print(f"[HashStore] cache saved ({len(self._data)} items)", flush=True)
 
 # ────────────────────────────────────────────────────────────────────
 # Main dedupe pipeline
@@ -191,23 +195,8 @@ def find_video_duplicates(
     use_gpu: bool               = False,
     report_path: str            = VIDEO_DEDUPE_REPORT_PATH
 ) -> pd.DataFrame:
-    """
-    1) Build 64‑bit super‑hash vectors.
-    2) FAISS coarse filter (L2 ≤ faiss_threshold).
-    3) Refine via limited alignment:
-       • best_aligned_diff (mean Hamming)
-       • time_shift_s
-       only within ±align_offset_limit_s.
-    4) Export columns:
-       file_a, file_b,
-       avg_frame_diff (0–8),
-       best_aligned_diff (0–64),
-       time_shift_s,
-       aligned_pct_diff (0–100%).
-    """
     t0 = time.time()
-    print(f"[find_video_duplicates] Start {time.strftime('%H:%M:%S')}")
-
+    print(f"[find_video_duplicates] Start {time.strftime('%H:%M:%S')}", flush=True)
     from funcs import get_list_of_files
 
     paths, folder_ids, durations = [], [], []
@@ -215,28 +204,42 @@ def find_video_duplicates(
 
     # gather files + durations
     for fid, folder in enumerate(directories):
-        for p in get_list_of_files(folder):
+        all_files = get_list_of_files(folder)
+        print(f"[find_video_duplicates] Folder {fid}: {folder} → {len(all_files)} files", flush=True)
+        video_paths = [f for f in all_files
+                 if Path(f).suffix.lower() in EXTS
+                 and '_gsdata_' not in f
+                 and not Path(f).name.startswith("._")]
+        print(f"[find_video_duplicates] Folder {fid}: {folder} → {len(video_paths)} video files", flush=True)
+        for p in video_paths:
             q = Path(p)
-            if q.suffix.lower() in EXTS and not q.name.startswith("._"):
-                paths.append(str(q))
-                folder_ids.append(fid)
-                cap = cv2.VideoCapture(str(q))
-                fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
-                cnt  = cap.get(cv2.CAP_PROP_FRAME_COUNT) or MAX_SAMPLES
-                durations.append(cnt / fps)
-                cap.release()
+            if q.suffix.lower() not in EXTS or q.name.startswith("._"):
+                continue
+            cap = cv2.VideoCapture(str(q))
+            if not cap.isOpened():
+                print(f"[find_video_duplicates] Skipping unreadable: {q}", flush=True)
+                continue
+            fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            cnt  = cap.get(cv2.CAP_PROP_FRAME_COUNT) or MAX_SAMPLES
+            cap.release()
+            paths.append(str(q))
+            folder_ids.append(fid)
+            durations.append(cnt / fps)
 
-    # build hashes & sequences
     vecs, seqs = [], []
     for p in paths:
-        avg_hex, seq_pairs = store.get(p)
+        try:
+            avg_hex, seq_pairs = store.get(p)
+        except RuntimeError:
+            continue
         vecs.append(_hex_to_vec(avg_hex))
         seqs.append(seq_pairs)
 
     if not vecs:
-        print("⚠️  No videos found.")
+        print("⚠️  No videos found.", flush=True)
         return pd.DataFrame()
 
+    print(f"[find_video_duplicates] {len(vecs)} videos hashed, building FAISS index...", flush=True)
     mat = np.stack(vecs).astype("float32")
     index = faiss.IndexFlatL2(mat.shape[1])
     if use_gpu:
@@ -245,61 +248,39 @@ def find_video_duplicates(
     index.add(mat)
 
     D, I = index.search(mat, top_k + 1)
+    print(f"[find_video_duplicates] FAISS search done", flush=True)
 
-    # stage 1: coarse candidate pairs
     raw_pairs = set()
     for i, (drow, idxrow) in enumerate(zip(D, I)):
         for dist, j in zip(drow, idxrow):
-            if i == j or dist > faiss_threshold:
-                continue
-            if not self_compare and folder_ids[i] == folder_ids[j]:
-                continue
-            raw_pairs.add(tuple(sorted((i, j))))
+            if i==j or dist>faiss_threshold: continue
+            if not self_compare and folder_ids[i]==folder_ids[j]: continue
+            raw_pairs.add(tuple(sorted((i,j))))
+    print(f"[find_video_duplicates] {len(raw_pairs)} candidate pairs", flush=True)
 
-    # stage 2: refine with limited alignment
     results = []
-    for i, j in raw_pairs:
-        sec_per_sample  = durations[i] / len(seqs[i]) if seqs[i] else float('inf')
-        max_shift_samps = int(align_offset_limit_s / sec_per_sample)
-
-        best_ham, best_ts = _aligned_distance_and_time_limited(
-            seqs[i], seqs[j],
-            max_shift_samps,
-            align_offset_limit_s
+    for i,j in raw_pairs:
+        sec_per = durations[i]/len(seqs[i]) if seqs[i] else float('inf')
+        max_shift = int(align_offset_limit_s/sec_per)
+        best_h, best_ts = _aligned_distance_and_time_limited(
+            seqs[i], seqs[j], max_shift, align_offset_limit_s
         )
-        if best_ham > align_threshold:
-            continue
-
-        idx = np.where(I[i] == j)[0]
-        if idx.size:
-            avg_diff = float(D[i][idx[0]])
-        else:
-            avg_diff = float(((vecs[i] - vecs[j]) ** 2).sum())
-
-        aligned_pct = best_ham / 64.0
-
+        if best_h>align_threshold: continue
+        idx = np.where(I[i]==j)[0]
+        avg_d = float(D[i][idx[0]]) if idx.size else float(((vecs[i]-vecs[j])**2).sum())
         results.append({
-            "file_a":                    paths[i],
-            "file_b":                    paths[j],
-            "avg_frame_diff (0–8)":      avg_diff,
-            "best_aligned_diff (0–64)":  best_ham,
-            "time_shift_s":              best_ts,
-            "aligned_pct_diff (0–100%)": aligned_pct
+            "file_a":paths[i], "file_b":paths[j],
+            "avg_frame_diff (0–64)":avg_d,
+            "best_aligned_diff (0–64)":best_h,
+            "time_shift_s":best_ts,
+            "aligned_pct_diff (0–100%)":best_h/64.0
         })
+    print(f"[find_video_duplicates] {len(results)} duplicates found, exporting...", flush=True)
 
-    df = pd.DataFrame(results, columns=[
-        "file_a",
-        "file_b",
-        "avg_frame_diff (0–8)",
-        "best_aligned_diff (0–64)",
-        "time_shift_s",
-        "aligned_pct_diff (0–100%)"
-    ])
-
+    df = pd.DataFrame(results)
     _export_excel(df, report_path)
-    print(f"[find_video_duplicates] Done in {time.time() - t0:.1f}s — {len(df)} pairs saved")
+    print(f"[find_video_duplicates] Done in {time.time()-t0:.1f}s — {len(results)} pairs saved", flush=True)
     return df
-
 
 # ────────────────────────────────────────────────────────────────────
 # Excel export helper
@@ -308,23 +289,14 @@ def _export_excel(df: pd.DataFrame, path: str):
     with ExcelWriter(path, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Duplicates")
         ws = writer.sheets["Duplicates"]
-
-        # Bold header row & freeze
-        for cell in ws[1]:
-            cell.font = Font(bold=True)
+        for cell in ws[1]: cell.font = Font(bold=True)
         ws.freeze_panes = "A2"
-
-        # Auto‑fit & format
         for idx, col in enumerate(df.columns, start=1):
             max_len = df[col].astype(str).map(len).max() if not df.empty else 0
-            width = max(len(col), max_len) + 2
-            ws.column_dimensions[get_column_letter(idx)].width = width
-
-            if col == "aligned_pct_diff (0–100%)":
-                for cell in ws[get_column_letter(idx)][1:]:
-                    cell.number_format = numbers.FORMAT_PERCENTAGE_00
-            elif col in ("avg_frame_diff (0–8)",
-                         "best_aligned_diff (0–64)",
-                         "time_shift_s"):
-                for cell in ws[get_column_letter(idx)][1:]:
-                    cell.number_format = numbers.FORMAT_NUMBER_00
+            width = max(len(col), max_len)+2
+            ws.column_dimensions[get_column_letter(idx)].width=width
+            if col=="aligned_pct_diff (0–100%)":
+                fmt=numbers.FORMAT_PERCENTAGE_00
+            else:
+                fmt=numbers.FORMAT_NUMBER_00
+            for cell in ws[get_column_letter(idx)][1:]: cell.number_format = fmt
