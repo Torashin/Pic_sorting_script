@@ -96,6 +96,7 @@ class FileObject:
         self._rel_path = None
         self._rel_dir = None
         self._media_type = None
+        self._file_size = None
         self._creation_date = None
         self.updated_creation_date = None
         self._modified_date = None
@@ -140,6 +141,13 @@ class FileObject:
             mime = kind.mime
             self._media_type = mime.split('/')[0]
         return self._media_type
+
+    @property
+    def file_size(self):
+        """Returns the size of the file at the given path in bytes."""
+        if self._file_size is None:
+            self._file_size = os.path.getsize(self.abs_path)
+        return self._file_size
 
     @property
     def creation_date(self):
@@ -196,78 +204,47 @@ class FileObject:
     @property
     def meta_date(self):
         if self._meta_date is None:
-            # get date taken from metadata
-            if exiftool_supported:
-                try:
-                    with exiftool.ExifToolHelper() as et:
-                        try:
-                            tagdata = et.get_tags(self.abs_path, "DateTimeOriginal")
-                            tagdata = tagdata[0]['EXIF:DateTimeOriginal']
-                        except:
-                            try:
-                                tagdata = et.get_tags(self.abs_path, "CreateDate")
-                                tagdata = tagdata[0]['QuickTime:CreateDate']
-                            except:
-                                try:
-                                    tagdata = et.get_tags(self.abs_path, "MediaCreateDate")
-                                    tagdata = tagdata[0]['QuickTime:MediaCreateDate']
-                                except:
-                                    return False
-                except:
-                    tagdata = ''
-                    print('Can\'t get meta date taken for ' + self.abs_path)
-            else:
-                if self.media_type == 'image':
-                    try:
-                        with open(self.abs_path, 'rb') as image_file:
-                            tags = exifread.process_file(image_file)
-                            tagdata = tags.get('EXIF DateTimeOriginal', None)
-                            if tagdata is None:
-                                return False
-                            else:
-                                tagdata = str(tagdata)
-                    except Exception as e:
-                        tagdata = ''
-                        print(f'Error getting meta date taken for {self.abs_path}: \n{e}')
-                else:
-                    print('Unsupported file format for this OS')
-            tagdata = tagdata.replace(":", "-")
-            if tagdata == '0000-00-00 00-00-00':
+            try:
+                tag_priority = [
+                    'EXIF:DateTimeOriginal',  # Common for images
+                    'QuickTime:CreateDate',  # Videos
+                    'QuickTime:MediaCreateDate'  # Videos
+                ]
+                tagdata = None
+
+                for tag in tag_priority:
+                    value = self.metadata.get(tag)
+                    if value:
+                        tagdata = str(value).replace(":", "-")
+                        break
+
+                if not tagdata:
+                    print(f"Can't get meta date taken for {self.abs_path}")
+                    return False
+
+                if tagdata == '0000-00-00 00-00-00':
+                    print(f"Can't get meta date taken for {self.abs_path}")
+                    return False
+
+                self._meta_date = tagdata
+            except Exception as e:
+                print(f"Error getting meta date taken for {self.abs_path}: \n{e}")
                 return False
-            self._meta_date = tagdata
+
         return self._meta_date
 
     @property
     def camera_model(self):
         if self._camera_model is None:
-            # get camera model from metadata
-            if exiftool_supported:
-                try:
-                    with exiftool.ExifToolHelper() as et:
-                        tagdata = et.get_tags(self.abs_path, "Model")
-                        tagdata = tagdata[0]['EXIF:Model']
-                except Exception as e:
-                    tagdata = ''
-                    print(f'Error getting camera model for {self.abs_path}: \n{e}')
-            else:
-                if self.media_type == 'image':
-                    try:
-                        with open(self.abs_path, 'rb') as image_file:
-                            tags = exifread.process_file(image_file)
-                            tagdata = tags.get('Image Model', None)
-                            if tagdata is None:
-                                tagdata = ''
-                                print('Can\'t get camera model for ' + self.abs_path)
-                            else:
-                                tagdata = str(tagdata)
-                    except Exception as e:
-                        tagdata = ''
-                        print(f'Error getting camera model for {self.abs_path}: \n{e}')
-                else:
-                    print('Unsupported file format for this OS')
-                    tagdata = ''
-            tagdata = tagdata.replace(":", "-")
-            self._camera_model = tagdata
+            try:
+                value = self.metadata.get('Image Model') or self.metadata.get('EXIF:Model')
+                if not value:
+                    print(f"Can't get camera model for {self.abs_path}")
+                    value = ''
+                self._camera_model = str(value).replace(":", "-")
+            except Exception as e:
+                print(f"Error getting camera model for {self.abs_path}: \n{e}")
+                self._camera_model = ''
         return self._camera_model
 
     @property
@@ -312,6 +289,37 @@ class FileObject:
             from video_dedupe import VideoHashStore
             self._video_seq_hash = VideoHashStore().get_seq_hash(self.abs_path)
         return self._video_seq_hash
+
+    @property
+    def video_length(self):
+        if hasattr(self, '_video_length') and self._video_length is not None:
+            return self._video_length
+
+        self._video_length = None  # Default if it fails
+
+        try:
+            tag_priority = [
+                'QuickTime:Duration',
+                'QuickTime:MediaDuration',
+                'QuickTime:PlayDuration',
+                'QuickTime:TrackDuration',
+                'RIFF:Duration',
+                'MPEG:Duration',
+                'Matroska:Duration'
+            ]
+
+            for tag in tag_priority:
+                value = self.metadata.get(tag)
+                if value:
+                    try:
+                        self._video_length = float(value)
+                        break
+                    except ValueError:
+                        continue
+        except Exception as e:
+            print(f"Failed to get video duration for {self.abs_path}: {e}")
+
+        return self._video_length
 
 
 def get_metadata(files):
@@ -1241,6 +1249,7 @@ def mirror_cdate_to_video_files(source_dir, dest_dir, folder_depth=1):
 filemanager = FileManager()
 
 if __name__ == "__main__":
+    from video_dedupe import find_video_duplicates
     print('###############START###############')
     #Test things
 
@@ -1249,3 +1258,4 @@ if __name__ == "__main__":
 
 #   TODO: Add buttons to GUI for more useful functions.
 #   TODO: Track files that don't finish processing successfully.
+
