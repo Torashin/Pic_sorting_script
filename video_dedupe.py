@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import List, Tuple, Dict
 import concurrent.futures
-
+import math
 import numpy as np
 import pandas as pd
 import cv2
@@ -17,6 +17,9 @@ import faiss
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, numbers
 from pandas import ExcelWriter
+import platform
+import subprocess
+import PySimpleGUI as sg
 
 # ────────────────────────────────────────────────────────────────────
 # Progress Counters (shared between hashing and duplicate finder)
@@ -30,14 +33,15 @@ PROCESSED_VIDEOS = 0
 VIDEO_HASH_STORE_PATH     = "video_hashes.json"
 VIDEO_DEDUPE_REPORT_PATH  = "video_duplicates.xlsx"
 
-MAX_SAMPLES               = 20      # key‑frame sample count per video
+MAX_SAMPLES               = 40      # max frame sample count per video
+MIN_SAMPLES               = 5       # min frame sample count per video
 FAISS_THRESHOLD           = 12      # raw L2 on 64‑bit super‑hash
 ALIGN_THRESHOLD           = 10.0    # raw mean Hamming
 ALIGN_OFFSET_LIMIT_S      = 60.0    # max time offset for alignment (seconds)
 TOP_K                     = 5
 EXTS                      = {'.mp4', '.mov', '.avi', '.m4v', '.mpg', '.mkv'}
 SAVE_EVERY                = 5       # save cache every N new entries
-MAX_WORKERS               = 2       # threads for hashing/metadata
+MAX_WORKERS               = 4       # threads for hashing/metadata
 
 # ────────────────────────────────────────────────────────────────────
 # Helpers
@@ -49,14 +53,30 @@ def _hex_to_vec(hex_str: str) -> np.ndarray:
     return bits.astype("float32")
 
 
-def _sample_hashes_with_times(path: str, k: int = MAX_SAMPLES) -> List[Tuple[str, float]]:
+def _calculate_target_samples(duration: float) -> int:
+    """
+    Calculate the number of target frames to sample based on video duration (in seconds),
+    using a logarithmic scaling that works well from ~2 seconds to 2 hours.
+    The result is clamped between 5 and 40.
+    """
+    if duration <= 0:
+        return 5
+    samples = int(math.log(duration + 1, 10) * 12)
+    return max(MIN_SAMPLES, min(samples, MAX_SAMPLES))
+
+
+def _sample_hashes_with_times(path: str) -> List[Tuple[str, float]]:
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-    step = max(1, frame_count // k)
+    duration = frame_count / fps
+
+    k = _calculate_target_samples(duration)  # calculate target number of samples based on duration
+
+    step = max(1, int(frame_count / k))
     out: List[Tuple[str, float]] = []
 
     for frame_idx in range(0, frame_count, step):
@@ -72,6 +92,7 @@ def _sample_hashes_with_times(path: str, k: int = MAX_SAMPLES) -> List[Tuple[str
 
     cap.release()
     return out
+
 
 
 def _average_hex(pairs: List[Tuple[str, float]]) -> str:
@@ -181,13 +202,16 @@ def _process_video(path_fid):
         if not cap.isOpened():
             return None
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        cnt = cap.get(cv2.CAP_PROP_FRAME_COUNT) or MAX_SAMPLES
+        cnt = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 1
         cap.release()
         avg_hex, seq = VideoHashStore().get(path)
-        return (path, fid, fps, cnt, avg_hex, seq)
+        file_size = os.path.getsize(path)  # Add this
+        duration = cnt / fps
+        return (path, fid, fps, cnt, avg_hex, seq, file_size, duration)
     except Exception as e:
         print(f"[find_video_duplicates] ERROR processing {path}: {e}", flush=True)
         return None
+
 
 # ────────────────────────────────────────────────────────────────────
 # Main dedupe pipeline
@@ -237,13 +261,15 @@ def find_video_duplicates(
         return pd.DataFrame()
 
     # unpack metadata
-    paths, folder_ids, durations, vecs, seqs = [], [], [], [], []
-    for path, fid, fps, cnt, avg_hex, seq in results:
+    paths, folder_ids, durations, vecs, seqs, sizes = [], [], [], [], [], []
+    for path, fid, fps, cnt, avg_hex, seq, file_size, duration in results:
         paths.append(path)
         folder_ids.append(fid)
         durations.append(cnt / fps)
         vecs.append(_hex_to_vec(avg_hex))
         seqs.append(seq)
+        durations.append(duration)
+        sizes.append(file_size)
 
     # FAISS index
     print(f"[find_video_duplicates] {len(vecs)} videos hashed, building FAISS index...", flush=True)
@@ -275,32 +301,90 @@ def find_video_duplicates(
         if best_h>align_threshold: continue
         idx = np.where(I[i]==j)[0]
         avg_d = float(D[i][idx[0]]) if idx.size else float(((vecs[i]-vecs[j])**2).sum())
+        aligned_pct_diff = best_h/64.0
+        temporal_pct_diff = abs(best_ts) / durations[i]
+        length_pct_diff = length_pct_diff = abs(durations[i] - durations[j]) / max(durations[i], durations[j])
         results.append({
-            "file_a":paths[i], "file_b":paths[j],
+            "file_a":paths[i],
+            "size_a (MB)": round(sizes[i] / (1024 * 1024), 2),
+            "duration_a (s)": durations[i],
+            "file_b":paths[j],
+            "size_b (MB)": round(sizes[j] / (1024 * 1024), 2),
+            "duration_b (s)": durations[j],
             "avg_frame_diff (0–64)":avg_d,
             "best_aligned_diff (0–64)":best_h,
             "time_shift_s":best_ts,
-            "aligned_pct_diff (0–100%)":best_h/64.0
+            "aligned_pct_diff (0–100%)": aligned_pct_diff,
+            "temporal_pct_diff (0–100%)": temporal_pct_diff,
+            "length_pct_diff (0–100%)": length_pct_diff,
+            "overall_difference (0–100%)": (aligned_pct_diff + temporal_pct_diff + length_pct_diff) / 3
         })
     print(f"[find_video_duplicates] {len(results)} duplicates found, exporting...", flush=True)
 
     df = pd.DataFrame(results)
-    _export_excel(df, report_path)
+    export_excel(df, report_path)
     print(f"[find_video_duplicates] Done in {time.time()-t0:.1f}s — {len(results)} pairs saved", flush=True)
+    open_excel_file(VIDEO_DEDUPE_REPORT_PATH)
     return df
 
 # ────────────────────────────────────────────────────────────────────
 # Excel export helper
 # ────────────────────────────────────────────────────────────────────
-def _export_excel(df: pd.DataFrame, path: str):
-    with ExcelWriter(path, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Duplicates")
-        ws = writer.sheets["Duplicates"]
-        for cell in ws[1]: cell.font = Font(bold=True)
-        ws.freeze_panes = "A2"
-        for idx, col in enumerate(df.columns, start=1):
-            max_len = df[col].astype(str).map(len).max() if not df.empty else 0
-            width = max(len(col), max_len)+2
-            ws.column_dimensions[get_column_letter(idx)].width = width
-            fmt = numbers.FORMAT_PERCENTAGE_00 if col=="aligned_pct_diff (0–100%)" else numbers.FORMAT_NUMBER_00
-            for cell in ws[get_column_letter(idx)][1:]: cell.number_format = fmt
+import PySimpleGUI as sg
+
+def export_excel(df: pd.DataFrame, path: str):
+    while True:
+        try:
+            with ExcelWriter(path, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="Duplicates")
+                ws = writer.sheets["Duplicates"]
+                for cell in ws[1]:
+                    cell.font = Font(bold=True)
+                ws.freeze_panes = "A2"
+                for idx, col in enumerate(df.columns, start=1):
+                    max_len = df[col].astype(str).map(len).max() if not df.empty else 0
+                    width = max(len(col), max_len) + 2
+                    ws.column_dimensions[get_column_letter(idx)].width = width
+
+                    if "%" in col in col:
+                        fmt = numbers.FORMAT_PERCENTAGE_00
+                    elif "duration" in col.lower() or "time" in col.lower():
+                        fmt = numbers.FORMAT_NUMBER_00
+                    elif "size" in col.lower() and "mb" in col.lower():
+                        fmt = numbers.FORMAT_NUMBER_00
+                    else:
+                        fmt = numbers.FORMAT_GENERAL
+
+                    for cell in ws[get_column_letter(idx)][1:]:
+                        cell.number_format = fmt
+            break  # Success, exit loop
+
+        except PermissionError:
+            choice = sg.popup_yes_no(
+                f"Can't write to file:\n{path}\n\nIt might be open in Excel.\n\nWould you like to retry?",
+                title="Export Failed",
+                keep_on_top=True
+            )
+            if choice != 'Yes':
+                print(f"Export to {path} aborted by user.")
+                break
+        except Exception as e:
+            sg.popup_error(f"Unexpected error while exporting:\n{e}", title="Export Failed", keep_on_top=True)
+            break
+
+
+def open_excel_file(path):
+    try:
+        if platform.system() == "Windows":
+            os.startfile(path)
+        elif platform.system() == "Darwin":
+            subprocess.call(["open", path])
+        elif platform.system() == "Linux":
+            subprocess.call(["xdg-open", path])
+    except Exception as e:
+        print(f"Could not open Excel file: {e}")
+
+
+#   TODO: Add to GUI
+#   TODO: Make use of FileManager to get file properties like file size, vid length, and maybe also hashes (instead of accessing directly from hashstore)
+
