@@ -306,10 +306,10 @@ def find_video_duplicates(
         length_pct_diff = length_pct_diff = abs(durations[i] - durations[j]) / max(durations[i], durations[j])
         results.append({
             "file_a":paths[i],
-            "size_a (MB)": round(sizes[i] / (1024 * 1024), 2),
-            "duration_a (s)": durations[i],
             "file_b":paths[j],
+            "size_a (MB)": round(sizes[i] / (1024 * 1024), 2),
             "size_b (MB)": round(sizes[j] / (1024 * 1024), 2),
+            "duration_a (s)": durations[i],
             "duration_b (s)": durations[j],
             "avg_frame_diff (0–64)":avg_d,
             "best_aligned_diff (0–64)":best_h,
@@ -345,16 +345,12 @@ def export_excel(df: pd.DataFrame, path: str):
                     max_len = df[col].astype(str).map(len).max() if not df.empty else 0
                     width = max(len(col), max_len) + 2
                     ws.column_dimensions[get_column_letter(idx)].width = width
-
-                    if "%" in col in col:
-                        fmt = numbers.FORMAT_PERCENTAGE_00
-                    elif "duration" in col.lower() or "time" in col.lower():
-                        fmt = numbers.FORMAT_NUMBER_00
-                    elif "size" in col.lower() and "mb" in col.lower():
-                        fmt = numbers.FORMAT_NUMBER_00
-                    else:
+                    if "file_a" in col.lower() or "file_b" in col.lower():
                         fmt = numbers.FORMAT_GENERAL
-
+                    elif "%" in col in col:
+                        fmt = numbers.FORMAT_PERCENTAGE_00
+                    else:
+                        fmt = numbers.FORMAT_NUMBER_00
                     for cell in ws[get_column_letter(idx)][1:]:
                         cell.number_format = fmt
             break  # Success, exit loop
