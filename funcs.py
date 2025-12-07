@@ -37,7 +37,7 @@ import datefinder
 
 if platform.system() == "Windows":
     import exiftool                     # Install PyExifTool
-    exiftool_path = os.path.abspath("exiftool.exe")
+    exiftool_path = os.path.abspath("resources/exiftool.exe")
     os.environ['EXIFTOOL_PATH'] = exiftool_path
     exiftool_supported = True
 #elif platform.system() == "Darwin":  # macOS
@@ -278,16 +278,15 @@ class FileObject:
     @property
     def video_hash(self):
         if self._video_hash is None:
-            # local import avoids NameError and circularity
             from video_dedupe import VideoHashStore
-            self._video_hash = VideoHashStore().get_avg_hash(self.abs_path)
+            self._video_hash, self._video_seq_hash = VideoHashStore().get(self.abs_path)
         return self._video_hash
 
     @property
     def video_seq_hash(self):
         if self._video_seq_hash is None:
             from video_dedupe import VideoHashStore
-            self._video_seq_hash = VideoHashStore().get_seq_hash(self.abs_path)
+            self._video_hash, self._video_seq_hash = VideoHashStore().get(self.abs_path)
         return self._video_seq_hash
 
     @property
@@ -1251,7 +1250,7 @@ filemanager = FileManager()
 if __name__ == "__main__":
     from video_dedupe import find_video_duplicates
     print('###############START###############')
-    #Test things
+
 
     print('All done!')
 
