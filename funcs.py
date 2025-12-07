@@ -88,7 +88,8 @@ class FileObject:
             known_month: int | None = None
     ):
 
-        self.base_dir = base_dir
+        # Default base_dir to the file's directory so rel paths still work when none is provided.
+        self.base_dir = base_dir or os.path.dirname(abs_path)
         self.abs_path = abs_path
         self.abs_dir, self.filename = os.path.split(abs_path)
         self.basename, extension = os.path.splitext(self.filename)
@@ -138,8 +139,11 @@ class FileObject:
     def media_type(self):
         if self._media_type is None:
             kind = filetype.guess(self.abs_path)
-            mime = kind.mime
-            self._media_type = mime.split('/')[0]
+            if kind is None:
+                self._media_type = None
+            else:
+                mime = kind.mime
+                self._media_type = mime.split('/')[0]
         return self._media_type
 
     @property
@@ -261,7 +265,7 @@ class FileObject:
             return str(self.dest_dir + self.problem_path + self.new_rel_dir + self.new_basename + self.extension)
 
     @property
-    def no_of_ags(self):
+    def no_of_tags(self):
         return len(self.metadata)
 
     @property
@@ -774,12 +778,15 @@ def bulkprocess(
     listoffiles = get_list_of_files(source_dir)
     if gui_obj:
         gui_obj.total_files = len(listoffiles)
+        # reset failure tracking for this run
+        gui_obj.failed_items = []
 
-    # Start concurrency
-    with concurrent.futures.ThreadPoolExecutor(8) as executor:
-        futures = [
-            executor.submit(
-                processfile,
+    failed_items = []
+    failed_lock = threading.Lock()
+
+    def safe_process(abs_path):
+        try:
+            return processfile(
                 abs_path,
                 source_dir,
                 dest,
@@ -795,6 +802,22 @@ def bulkprocess(
                 known_year,
                 known_month
             )
+        except Exception as e:
+            print(f"Error processing file {abs_path}: {e}")
+            with failed_lock:
+                failed_items.append((abs_path, str(e)))
+            if gui_obj:
+                with gui_obj.files_processed_lock:
+                    gui_obj.files_processed += 1
+            return False
+
+    # Start concurrency
+    with concurrent.futures.ThreadPoolExecutor(8) as executor:
+        futures = [
+            executor.submit(
+                safe_process,
+                abs_path
+            )
             for abs_path in listoffiles
         ]
 
@@ -804,7 +827,7 @@ def bulkprocess(
                 # This will re-raise any exception that occurred in the worker
                 future.result()
             except Exception as e:
-                print(f"Error processing file: {e}")
+                print(f"Error processing file: {e}")  # Should be rare because safe_process catches most
 
             # Check for early stop signal
             if gui_obj and gui_obj.stop_event and gui_obj.stop_event.is_set():
@@ -822,6 +845,10 @@ def bulkprocess(
 
     if gui_obj and gui_obj.finish_event:
         gui_obj.finish_event.set()  # Indicate that the process has completed
+    if gui_obj is not None:
+        gui_obj.failed_items = failed_items
+    if failed_items:
+        print(f"\nCompleted with {len(failed_items)} failures. See gui_obj.failed_items for details.")
 
 
 
@@ -1050,6 +1077,9 @@ def are_meta_duplicates(fileobj1, fileobj2):
 
 
 def are_hash_duplicates(fileobj1, fileobj2, SIMILARITY_THRESHOLD=0.99):
+    if not fileobj1.image_hash or not fileobj2.image_hash:
+        print(f"Skipping hash compare because one or both files lacked a hash: {fileobj1.abs_path}, {fileobj2.abs_path}")
+        return False
     if imgcomp(fileobj1, fileobj2) >= SIMILARITY_THRESHOLD:
         return True
     else:
@@ -1057,21 +1087,24 @@ def are_hash_duplicates(fileobj1, fileobj2, SIMILARITY_THRESHOLD=0.99):
 
 
 def are_duplicates_OS_dependent(path1, path2):
+    fileobj1 = filemanager.get_file(path1)
+    fileobj2 = filemanager.get_file(path2)
     if exiftool_supported:
-        result = are_meta_duplicates(filemanager.get_file(path1), filemanager.get_file(path2))
+        result = are_meta_duplicates(fileobj1, fileobj2)
         if result in ['unknown']:
             print('Trying hash dupliate comparison instead')
-            return are_hash_duplicates(path1, path2)
+            return are_hash_duplicates(fileobj1, fileobj2)
         else:
             return result
     else:
-        return are_hash_duplicates(path1, path2)
+        return are_hash_duplicates(fileobj1, fileobj2)
 
 def check_for_matching_jpeg(heic_path, existing_jpeg_names):    #check if jpeg with the same name and metadata exits
     dir = os.path.dirname(heic_path)
+    heic_fileobj = filemanager.get_file(heic_path)
     for jpeg_filename in existing_jpeg_names:
         jpeg_path = os.path.join(dir, jpeg_filename)
-        meta_comp_result = compare_exif(heic_path, filemanager.get_file(jpeg_path,), 'image')  # Compare metadata
+        meta_comp_result = compare_exif(heic_fileobj, filemanager.get_file(jpeg_path), 'image')  # Compare metadata
         if meta_comp_result in ['same']:
             print(f'A matching JPEG for {heic_path} already exists: {jpeg_filename}')
             return True

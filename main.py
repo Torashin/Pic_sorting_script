@@ -30,6 +30,7 @@ class PicSortingScriptGUI:
         self.total_files = 0
         self.files_processed = 0
         self.files_processed_lock = threading.Lock()
+        self.failed_items = []
         self.is_running = False  # Flag to track if process is running
         self.stop_event = threading.Event()  # Event to signal stop
         self.finish_event = threading.Event()  # Event to signal finish
@@ -112,6 +113,7 @@ class PicSortingScriptGUI:
         # Update status bar
         self.total_files = 0  # Set the total number of files (replace with actual count)
         self.files_processed = 0
+        self.failed_items = []
         self.update_status()
 
         # Set flags
