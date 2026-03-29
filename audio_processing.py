@@ -65,6 +65,26 @@ def ffprobe_duration_seconds(filepath: str) -> float:
         raise RuntimeError("Could not parse duration from ffprobe.")
 
 
+def ffprobe_audio_stream_index(filepath: str) -> int | None:
+    cmd = [
+        "ffprobe", "-hide_banner", "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=index",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        filepath,
+    ]
+    code, out, _err = _run_ffmpeg(cmd)
+    if code != 0:
+        return None
+    text = out.decode("utf-8", "ignore").strip()
+    if not text:
+        return None
+    try:
+        return int(text.splitlines()[0].strip())
+    except ValueError:
+        return None
+
+
 # -------------------------
 # FAST: head/tail silence via silencedetect
 # -------------------------
@@ -192,16 +212,102 @@ def merge_close_regions(
 def read_audio_ffmpeg_pcm(filepath: str, target_sr: int = 8000) -> tuple[np.ndarray, int]:
     """Decode to mono PCM s16le via FFmpeg at a low sample rate (fast)."""
     cmd = [
-        "ffmpeg", "-hide_banner",
+        "ffmpeg", "-hide_banner", "-nostdin",
         "-i", filepath,
         "-vn", "-ac", "1", "-ar", str(target_sr),
         "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"
     ]
     code, out, err = _run_ffmpeg(cmd)
     if code != 0 or len(out) == 0:
-        raise RuntimeError("FFmpeg PCM decode failed:\n" + err.decode("utf-8", "ignore"))
+        stream_idx = ffprobe_audio_stream_index(filepath)
+        if stream_idx is not None:
+            cmd = [
+                "ffmpeg", "-hide_banner", "-nostdin",
+                "-i", filepath,
+                "-map", f"0:{stream_idx}",
+                "-vn", "-sn", "-dn",
+                "-ac", "1", "-ar", str(target_sr),
+                "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"
+            ]
+            code, out, err = _run_ffmpeg(cmd)
+        if code != 0 or len(out) == 0:
+            raise RuntimeError("FFmpeg PCM decode failed:\n" + err.decode("utf-8", "ignore"))
     y = np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
     return y, target_sr
+
+
+def compute_audio_fingerprints(
+    filepath: str,
+    *,
+    target_sr: int = 8000,
+    win_s: float = 1.0,
+    hop_s: float = 1.0,
+    n_bands: int = 16,
+    min_freq: float = 200.0,
+    max_freq: float = 3400.0,
+    rms_thresh_db: float | None = -55.0,
+) -> List[Tuple[float, int]]:
+    """
+    Compute coarse audio hashes across the full clip for offset voting.
+    Returns [(time_s, hash_int), ...].
+    """
+    try:
+        y, sr = read_audio_ffmpeg_pcm(filepath, target_sr=target_sr)
+    except RuntimeError:
+        return []
+    win = max(1, int(round(win_s * sr)))
+    hop = max(1, int(round(hop_s * sr)))
+    if y.size < win:
+        return []
+
+    window = np.hanning(win).astype(np.float32)
+    freqs = np.fft.rfftfreq(win, d=1.0 / sr)
+    band_edges = np.linspace(min_freq, max_freq, n_bands + 1)
+    band_bins = []
+    for i in range(n_bands):
+        f0, f1 = band_edges[i], band_edges[i + 1]
+        b0 = int(np.searchsorted(freqs, f0, side="left"))
+        b1 = int(np.searchsorted(freqs, f1, side="right"))
+        if b1 <= b0:
+            b1 = min(b0 + 1, freqs.size)
+        band_bins.append((b0, b1))
+
+    out: List[Tuple[float, int]] = []
+    eps = 1e-12
+    for start in range(0, y.size - win + 1, hop):
+        frame = y[start:start + win]
+        if rms_thresh_db is not None:
+            rms = float(np.sqrt(np.mean(frame * frame) + eps))
+            rms_db = 20.0 * math.log10(max(rms, eps))
+            if rms_db < rms_thresh_db:
+                continue
+
+        spec = np.fft.rfft(frame * window)
+        mag2 = np.abs(spec) ** 2
+
+        energies = np.empty(n_bands, dtype=np.float32)
+        for i, (b0, b1) in enumerate(band_bins):
+            energies[i] = mag2[b0:b1].sum()
+        if not np.isfinite(energies).all():
+            continue
+
+        loge = np.log10(energies + eps)
+        med = float(np.median(loge))
+
+        hash_val = 0
+        bit_idx = 0
+        for i in range(n_bands - 1):
+            if loge[i + 1] > loge[i]:
+                hash_val |= (1 << bit_idx)
+            bit_idx += 1
+        for i in range(n_bands):
+            if loge[i] > med:
+                hash_val |= (1 << bit_idx)
+            bit_idx += 1
+
+        t = start / sr
+        out.append((float(round(t, 3)), int(hash_val)))
+    return out
 
 
 def compute_audio_rms(filepath: str, win_s: float = 0.5, hop_s: float = 0.2, target_sr: int = 8000) -> List[Tuple[float, float, float]]:
@@ -294,3 +400,8 @@ def print_silence_report(filepath: str, *, do_full_scan: bool = False) -> None:
 
 if __name__ == "__main__":
     print()
+    filepath = r""  # Set to a local media file before running this file directly.
+    if not filepath:
+        print("Set filepath in __main__ before running this file directly.")
+    else:
+        print_silence_report(filepath, do_full_scan=False)

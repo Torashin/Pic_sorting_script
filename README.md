@@ -1,24 +1,89 @@
 # Pic Sorting Script
 
-## Overview 
-This project started as a personal endeavor to organize my photo and home video libraries. Over time, it grew to become
-a fairly capable tool for sorting and managing media files. Recognizing its potential usefulness to others, I've
-decided to make it freely available.
+## Overview
+This project started as a personal media-library tool and now contains two substantial workflows:
 
-The Pic Sorting Script is designed to analyze the metadata, creation dates, and modified dates of media files, along
-with any dates found in the parent folder, to determine the most likely correct date that a photo or video was taken.
-It offers options to copy or move the files to a structured YYYY-MM folder format and can optionally rename the copied
-or moved files based on the chosen date.
+1. Photo/video sorting and renaming based on metadata, filesystem dates, and folder/date hints.
+2. Home-video deduplication, timestamp extraction, review reporting, and lossless remux planning.
 
-Additionally, the script includes functionality to recognize duplicate files. When duplicate files are detected, the
-script moves or copies them into a separate folder while maintaining the original folder hierarchy.
+It is still a pragmatic working tool rather than a polished end-user application. The code is useful, but it assumes the user is comfortable editing Python run blocks, reviewing generated Excel workbooks, and making backups before applying changes.
 
-## Disclaimer 
-While I've put considerable effort into ensuring the reliability and functionality of this tool, it's important to note
-that it originated as a personal project. As such, there may be bugs or unforeseen issues. Users are encouraged to
-exercise caution and make backups of their files before using this tool. Additionally, users without coding experience
-should proceed with caution and may find it challenging to use the script effectively.
+## Main components
 
-## License 
-This project is protected under the GNU General Public License v3.0. You are free to modify and distribute it under the
-terms of this license. For more information, please refer to the COPYING file at the root directory of this project.
+### `main.py`
+PySimpleGUI desktop front-end for the original sorting workflow in `funcs.py`.
+
+### `funcs.py`
+Core photo/video sorting, metadata handling, copy/move logic, and assorted file-management helpers.
+
+### `video_dedupe.py`
+The main dedupe pipeline. It can:
+
+- compare two folders of videos
+- run anchor/audio/timeline matching
+- scan camcorder on-screen timestamps
+- infer coverage/unique-content relationships
+- build review workbooks in `reports/`
+- maintain a unified cache in `resources/cache/video_cache.json`
+
+### `video_rename_remux.py`
+Workbook-driven execution runner for:
+
+- renaming files based on `Rename_Queue` / `Rename_Done`
+- losslessly remuxing segments from `Remux_Plan` and optionally `Remux_Short`
+- migrating cache keys when files are renamed
+
+## Typical dedupe workflow
+1. Run `video_dedupe.py` to refresh scans and rebuild `reports/dedupe_consolidated.xlsx`.
+2. Review the workbook:
+   - rename decisions in `Rename_Queue`
+   - remux decisions in `Remux_Plan`
+   - optional short segments in `Remux_Short`
+3. Run `video_rename_remux.py` in dry-run mode first.
+4. Run `video_rename_remux.py` with `apply=True` once satisfied.
+
+## Requirements
+
+Python packages are listed in `requirements.txt`.
+
+External tools used by the project:
+
+- `ffmpeg`
+- `ffprobe`
+- `ExifTool`
+
+This repo keeps `resources/exiftool.exe` and `resources/exiftool` in-tree so the original sorting workflow still works in environments where ExifTool is not already installed.
+
+## PySimpleGUI note
+The repository includes:
+
+- `Other/PySimpleGUI-4.60.5-main/PySimpleGUI-4.60.5-py3-none-any.whl`
+
+This is intentional. Older free PySimpleGUI versions became difficult to obtain reliably, and this project still depends on that package for the original GUI workflow.
+
+## Generated files
+These are runtime artifacts and should not normally be committed:
+
+- `reports/`
+- `resources/cache/`
+- `resources/timestamp_debug/`
+- local workflow test outputs under `Other/`
+
+The root `.gitignore` excludes them.
+
+## Utility scripts in `Other/`
+`Other/` contains small standalone helpers that were useful during development and are kept as generic utilities:
+
+- `Other/folder_renaming.py`
+- `Other/list_files_in_folder.py`
+
+They are not part of the core dedupe pipeline.
+
+## Status / caveats
+- The project is powerful but not simplified.
+- The dedupe workflow is designed around spreadsheet review.
+- Some run blocks still assume the user will edit local paths before running.
+- Backups are strongly recommended before any rename/move/remux operation.
+
+## License
+This project is licensed under the GNU General Public License v3.0. See `COPYING`.

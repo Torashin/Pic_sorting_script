@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtualenvs / IDE
+.venv/
+.idea/
+
+# Generated reports and caches
+reports/
+resources/cache/
+resources/timestamp_debug/
+
+# Local test outputs / scratch files
+Other/remux_test/
+Other/workflow_test/
+Other/workflow_test_live/
+
+# OS/editor noise
+Thumbs.db
+.DS_Store

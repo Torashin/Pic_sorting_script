@@ -1281,11 +1281,9 @@ def mirror_cdate_to_video_files(source_dir, dest_dir, folder_depth=1):
 filemanager = FileManager()
 
 if __name__ == "__main__":
-    from video_dedupe import find_video_duplicates
     print('###############START###############')
-
-
-    print('All done!')
+    print('This module does not expose a polished standalone CLI entrypoint.')
+    print('Use main.py for the original GUI workflow or video_dedupe.py / video_rename_remux.py for video workflows.')
 
 
 #   TODO: Add buttons to GUI for more useful functions.
