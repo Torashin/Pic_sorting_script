@@ -1281,9 +1281,33 @@ def mirror_cdate_to_video_files(source_dir, dest_dir, folder_depth=1):
 filemanager = FileManager()
 
 if __name__ == "__main__":
+    from video_dedupe import find_video_duplicates
     print('###############START###############')
-    print('This module does not expose a polished standalone CLI entrypoint.')
-    print('Use main.py for the original GUI workflow or video_dedupe.py / video_rename_remux.py for video workflows.')
+    #Test things
+    #edit_metadata(r'/path/to/image.jpg', "DateTimeOriginal", "2024:02:19 12:00:00")
+    #print(get_metadata([r'/path/to/media.jpg']))
+    #change_extension_case(r'C:\path\to\folder', 'u')
+    #mirror_cdate_to_video_files(r'D:\Source Videos', r'D:\Source Videos\Re-encoded')
+    #print(get_metadata([r'C:\path\to\video.mp4']))
+    #bulkfixcreationdates(r'C:\path\to\camera_rolls')
+    # bulkprocess(
+    #     source_dir=r'C:\path\to\source_media',
+    #     dest=r'C:\path\to\processed_media',
+    #     rename_files=False,
+    #     movefiles=False,
+    #     update_meta_date=True,
+    #     rename_folders=False,
+    #     known_year=2001
+    # )
+
+    find_video_duplicates(
+        directories=[r"D:\Video Archive A", r"E:\Video Archive B"],
+        faiss_threshold=30.0,  # coarse filter
+        align_threshold=30.0,  # fine alignment
+        self_compare=False,
+    )
+
+    print('All done!')
 
 
 #   TODO: Add buttons to GUI for more useful functions.

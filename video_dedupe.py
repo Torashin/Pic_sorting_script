@@ -8930,6 +8930,7 @@ B_GROUP_COMPARE_SHEET_COLUMNS = [
 
 RENAME_WORKFLOW_SHEET_COLUMNS = [
     "workflow_status",
+    "execution_status",
     "notes",
     "proposed_new_name",
     "triage_tier",
@@ -8966,6 +8967,7 @@ RENAME_WORKFLOW_SHEET_COLUMNS = [
 
 REMUX_PLAN_SHEET_COLUMNS = [
     "workflow_status",
+    "execution_status",
     "notes",
     "proposed_output_name",
     "unique_segment_status",
@@ -8991,6 +8993,26 @@ REMUX_PLAN_SHEET_COLUMNS = [
     "group_id",
 ]
 
+EDIT_PLAN_SHEET_COLUMNS = [
+    "workflow_status",
+    "execution_status",
+    "notes",
+    "output_name",
+    "edit_group",
+    "part_index",
+    "source_file_name",
+    "source_file_path",
+    "segment_start_s",
+    "start_keyframe_mode",
+    "segment_end_s",
+    "end_keyframe_mode",
+    "segment_duration_s",
+    "source_video_runtime_s",
+    "source_osd_month_year_start",
+    "source_osd_month_year_end",
+    "codec_summary",
+]
+
 
 def _select_existing_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """Keep requested columns in order, silently skipping absent ones."""
@@ -9006,6 +9028,7 @@ def _write_consolidated_workbook(
     rename_done_df: pd.DataFrame,
     remux_plan_df: pd.DataFrame,
     remux_short_df: pd.DataFrame,
+    edit_plan_df: pd.DataFrame,
     b_group_compare_df: pd.DataFrame,
     consolidated_view: pd.DataFrame,
     a_coverage_df: pd.DataFrame,
@@ -9040,6 +9063,9 @@ def _write_consolidated_workbook(
                 if not remux_short_df.empty:
                     remux_short_df.to_excel(writer, index=False, sheet_name="Remux_Short")
                     _format_excel_sheet(remux_short_df, writer.sheets["Remux_Short"])
+
+                edit_plan_df.to_excel(writer, index=False, sheet_name="Edit_Plan")
+                _format_excel_sheet(edit_plan_df, writer.sheets["Edit_Plan"])
 
                 if not b_group_compare_df.empty:
                     b_group_compare_df.to_excel(writer, index=False, sheet_name="B_Group_Compare")
@@ -9228,6 +9254,7 @@ def _load_prior_workflow_and_remux_state(
                     has_done_local = True
                 state_local[_norm_path(p)] = _merge_text_state(state_local.get(_norm_path(p)), {
                     "workflow_status": workflow_status,
+                    "execution_status": _safe_text_cell(prow.get("execution_status", "")),
                     "proposed_new_name": _safe_text_cell(prow.get("proposed_new_name", "")),
                     "decision": _safe_text_cell(prow.get("decision", "")),
                     "notes": _safe_text_cell(prow.get("notes", "")),
@@ -9260,6 +9287,7 @@ def _load_prior_workflow_and_remux_state(
                     continue
                 row_state = {
                     "workflow_status": _safe_text_cell(prow.get("workflow_status", "")),
+                    "execution_status": _safe_text_cell(prow.get("execution_status", "")),
                     "proposed_output_name": _safe_text_cell(prow.get("proposed_output_name", "")),
                     "notes": _safe_text_cell(prow.get("notes", "")),
                 }
@@ -9348,6 +9376,37 @@ def _load_prior_workflow_and_remux_state(
                     prior_queue_state[k] = _merge_text_state(prior_queue_state.get(k), v)
 
     return prior_queue_state, prior_remux_state, prior_remux_state_by_path, has_done_local
+
+
+def _load_prior_edit_plan(
+    *,
+    output_path: str | None,
+    state_source_path: str | None,
+) -> pd.DataFrame:
+    state_paths: list[str] = []
+    if output_path:
+        state_paths.append(str(output_path))
+    if state_source_path:
+        src = str(state_source_path)
+        if src and (src not in state_paths):
+            state_paths.append(src)
+
+    for path in state_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            df = pd.read_excel(path, sheet_name="Edit_Plan")
+        except Exception:
+            continue
+        if df is None:
+            continue
+        if df.empty:
+            return pd.DataFrame(columns=EDIT_PLAN_SHEET_COLUMNS)
+        for col in EDIT_PLAN_SHEET_COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        return _select_existing_columns(df, EDIT_PLAN_SHEET_COLUMNS)
+    return pd.DataFrame(columns=EDIT_PLAN_SHEET_COLUMNS)
 
 
 def _build_coverage_views(
@@ -9640,6 +9699,7 @@ def consolidate_dedupe_reports(
     - Rename_Queue (primary workflow; grouped file rows with separators)
     - Rename_Done (optional; rows marked done/completed/archived on prior run)
     - Remux_Plan (A-side unique segments above threshold, for preservation/remux planning)
+    - Edit_Plan (manual multi-part rebuild/concat plan)
     - Consolidated (pair-level detail for deeper inspection)
     - A_Coverage (all folder-A files, counterpart file-B names, and coverage metrics)
     - B_Coverage (all folder-B files, counterpart file-A names, and coverage metrics)
@@ -11660,6 +11720,10 @@ def consolidate_dedupe_reports(
         output_path=output_path,
         state_source_path=state_source_path,
     )
+    edit_plan_df = _load_prior_edit_plan(
+        output_path=output_path,
+        state_source_path=state_source_path,
+    )
     done_status_tokens = {"done", "complete", "completed", "archived"}
     if prior_queue_state:
         loaded_done_count = int(
@@ -11801,6 +11865,7 @@ def consolidate_dedupe_reports(
                 "osd_hits": int(ts_hits_norm.get(norm, 0)),
                 "same_group_file_b_summary": "",
                 "workflow_status": _safe_text_cell(state.get("workflow_status", "")),
+                "execution_status": _safe_text_cell(state.get("execution_status", "")),
                 "proposed_new_name": _safe_text_cell(state.get("proposed_new_name", "")),
                 "decision": _safe_text_cell(state.get("decision", "")),
                 "notes": _safe_text_cell(state.get("notes", "")),
@@ -12188,6 +12253,7 @@ def consolidate_dedupe_reports(
                             seg_state = dict(best_state)
                 row_payload = {
                     "workflow_status": _safe_text_cell(seg_state.get("workflow_status", "")),
+                    "execution_status": _safe_text_cell(seg_state.get("execution_status", "")),
                     "proposed_output_name": _safe_text_cell(seg_state.get("proposed_output_name", "")),
                     "unique_segment_status": seg_status,
                     "file_a_name": _safe_text_cell(arow.get("file_name", "")),
@@ -12240,6 +12306,7 @@ def consolidate_dedupe_reports(
         remux_plan_df = _select_existing_columns(remux_plan_df, REMUX_PLAN_SHEET_COLUMNS)
         for col in [
             "workflow_status",
+            "execution_status",
             "proposed_output_name",
             "unique_segment_status",
             "borderline_maybe_file_b_name",
@@ -12267,6 +12334,7 @@ def consolidate_dedupe_reports(
         remux_short_df = _select_existing_columns(remux_short_df, REMUX_PLAN_SHEET_COLUMNS)
         for col in [
             "workflow_status",
+            "execution_status",
             "proposed_output_name",
             "unique_segment_status",
             "borderline_maybe_file_b_name",
@@ -12422,6 +12490,7 @@ def consolidate_dedupe_reports(
             "Rename_Done": rename_done_df,
             "Remux_Plan": remux_plan_df,
             "Remux_Short": remux_short_df,
+            "Edit_Plan": edit_plan_df,
         }
     )
 
@@ -12438,6 +12507,7 @@ def consolidate_dedupe_reports(
     rename_done_df = _blankify_string_nans(rename_done_df)
     remux_plan_df = _blankify_string_nans(remux_plan_df)
     remux_short_df = _blankify_string_nans(remux_short_df)
+    edit_plan_df = _blankify_string_nans(edit_plan_df)
     b_group_compare_df = _blankify_string_nans(b_group_compare_df)
     consolidated_view = _blankify_string_nans(consolidated_view)
     a_coverage_df = _blankify_string_nans(a_coverage_df)
@@ -12454,6 +12524,7 @@ def consolidate_dedupe_reports(
         rename_done_df=rename_done_df,
         remux_plan_df=remux_plan_df,
         remux_short_df=remux_short_df,
+        edit_plan_df=edit_plan_df,
         b_group_compare_df=b_group_compare_df,
         consolidated_view=consolidated_view,
         a_coverage_df=a_coverage_df,
@@ -12687,9 +12758,9 @@ def run_dedupe_pipeline(
 
 if __name__ == "__main__":
     print()
-    # Example: compare two folders. Edit these before running directly.
-    folder_a = r""
-    folder_b = r""
+    # Example: compare two folders. Recursive scan of subdirectories.
+    folder_a = r"D:\Example Videos\Archive A"
+    folder_b = r"E:\Example Videos\Archive B"
     directories = [folder_a, folder_b]
 
     # Run knobs (PyCharm-friendly; edit and Run)
@@ -12717,10 +12788,7 @@ if __name__ == "__main__":
         "open_consolidated_report": True,
     }
 
-    if not folder_a or not folder_b:
-        print("Set folder_a and folder_b in __main__ before running this file directly.")
-    else:
-        run_dedupe_pipeline(
-            directories=directories,
-            **PIPELINE_CONFIG,
-        )
+    run_dedupe_pipeline(
+        directories=directories,
+        **PIPELINE_CONFIG,
+    )

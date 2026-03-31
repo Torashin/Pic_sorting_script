@@ -400,8 +400,5 @@ def print_silence_report(filepath: str, *, do_full_scan: bool = False) -> None:
 
 if __name__ == "__main__":
     print()
-    filepath = r""  # Set to a local media file before running this file directly.
-    if not filepath:
-        print("Set filepath in __main__ before running this file directly.")
-    else:
-        print_silence_report(filepath, do_full_scan=False)
+    filepath = r"example_input_video.mkv"  # change me
+    print_silence_report(filepath, do_full_scan=False)

@@ -299,10 +299,6 @@ def extract_camcorder_date_from_image(image_path: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    print()
-    TEST_IMAGE_PATH = r""  # Set to a local image path before running this file directly.
-    if not TEST_IMAGE_PATH:
-        print("Set TEST_IMAGE_PATH in __main__ before running this file directly.")
-    else:
-        result = extract_camcorder_date_from_image(TEST_IMAGE_PATH)
-        print(result)
+    TEST_IMAGE_PATH = r"example_input_image.png"
+    result = extract_camcorder_date_from_image(TEST_IMAGE_PATH)
+    print(result)
