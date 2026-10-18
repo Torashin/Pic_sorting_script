@@ -19,6 +19,7 @@
 import os
 import shutil
 import time
+import threading
 from datetime import datetime
 # from dateutil.parser import parse
 import pathlib
@@ -35,10 +36,10 @@ import datefinder
 #import logging
 #logging.basicConfig(level=logging.DEBUG)  # Set the logging level according to your preference
 
+exiftool_path = None
 if platform.system() == "Windows":
     import exiftool                     # Install PyExifTool
-    exiftool_path = os.path.abspath("resources/exiftool.exe")
-    os.environ['EXIFTOOL_PATH'] = exiftool_path
+    exiftool_path = str(pathlib.Path(__file__).resolve().parent / "resources" / "exiftool.exe")
     exiftool_supported = True
 #elif platform.system() == "Darwin":  # macOS
     #import exiftool
@@ -48,7 +49,7 @@ if platform.system() == "Windows":
 else:
     try:
         import exiftool
-        with exiftool.ExifToolHelper() as et:
+        with exiftool.ExifToolHelper(executable=exiftool_path) as et:
             version = et.execute("-ver")
             exiftool_supported = True
     except Exception as e:
@@ -329,7 +330,7 @@ def get_metadata(files):
     metadata = []
     if exiftool_supported:
         try:
-            with exiftool.ExifToolHelper() as et:
+            with exiftool.ExifToolHelper(executable=exiftool_path) as et:
                 metadata = et.get_metadata(files)
                 return metadata
         except Exception as e:
@@ -457,7 +458,7 @@ def set_creation_date(file, newcdate):
     filebytes = file.encode('utf_8')
     newcdate = newcdate.replace("-", ":")
     etcommand = b"-FileCreateDate=" + newcdate.encode('utf_8')
-    with exiftool.ExifToolHelper() as et:
+    with exiftool.ExifToolHelper(executable=exiftool_path) as et:
         et.execute(etcommand, filebytes)
 
 
@@ -1220,7 +1221,7 @@ def bulkprocess_sort_by_exif_quality(source_dir, dest):
 def edit_metadata(image_path, metadata_changes):
     if exiftool_supported:
         print('Starting metadata edit...')
-        with exiftool.ExifToolHelper() as et:
+        with exiftool.ExifToolHelper(executable=exiftool_path) as et:
             try:
                 et.execute("-overwrite_original", *[f"-{k}={v}" for k, v in metadata_changes.items()], image_path)
                 print("Metadata edited successfully.")

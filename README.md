@@ -44,7 +44,27 @@ Workbook-driven execution runner for:
 
 ## Requirements
 
-Python packages are listed in `requirements.txt`.
+Use Python 3.14 with Tcl/Tk installed. The pinned Windows package versions
+are in `requirements.txt`. With PyCharm using the project's `.venv`, install
+from the repository root using PowerShell:
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip install --only-binary=:all: -r requirements.txt
+& .\.venv\Scripts\python.exe -m pip check
+& .\.venv\Scripts\python.exe main.py
+```
+
+The environment uses NumPy 2 and includes pandas, FAISS, OpenCV, and HEIF
+support. pandas remains on 2.3 and OpenCV on 4.x to retain the existing APIs.
+Python 3.15 is not supported by this setup because FAISS has no compatible
+wheel as of 18 October 2026.
+
+Run the compatibility checks from the repository root (the GUI check briefly
+opens a window; sorting checks use temporary sample files):
+
+```powershell
+& .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
 External tools used by the project:
 
@@ -52,14 +72,20 @@ External tools used by the project:
 - `ffprobe`
 - `ExifTool`
 
-This repo keeps `resources/exiftool.exe` and `resources/exiftool` in-tree so the original sorting workflow still works in environments where ExifTool is not already installed.
+This repo keeps `resources/exiftool.exe` and `resources/exiftool` in-tree.
+On Windows, `funcs.py` explicitly passes the bundled executable's absolute
+path to PyExifTool, so ExifTool does not need to be on PATH. FFmpeg and ffprobe
+must be on PATH for video/audio processing.
 
 ## PySimpleGUI note
 The repository includes:
 
 - `Other/PySimpleGUI-4.60.5-main/PySimpleGUI-4.60.5-py3-none-any.whl`
 
-This is intentional. Older free PySimpleGUI versions became difficult to obtain reliably, and this project still depends on that package for the original GUI workflow.
+This wheel is retained for historical use. The current requirements install
+PySimpleGUI 6.3 from PyPI, whose window creation works with Tcl/Tk 9. The old
+4.60.5 wheel uses a removed Tcl command and must not be installed in this
+environment.
 
 ## Generated files
 These are runtime artifacts and should not normally be committed:
@@ -70,6 +96,14 @@ These are runtime artifacts and should not normally be committed:
 - local workflow test outputs under `Other/`
 
 The root `.gitignore` excludes them.
+
+## Local and public branches
+
+`master` is the public branch and uses generic example paths. Keep personal
+paths and run settings on the local `private` branch. Transfer shared fixes
+with selective cherry-picks rather than merging private history into master.
+Push the public branch explicitly with `git push origin master`; avoid
+`--all` and `--mirror`. Local `.env` files and `local_settings.json` are ignored.
 
 ## Utility scripts in `Other/`
 `Other/` contains small standalone helpers that were useful during development and are kept as generic utilities:

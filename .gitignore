@@ -6,6 +6,12 @@ __pycache__/
 .venv/
 .idea/
 
+# Local credentials and machine-specific configuration
+.env
+.env.*
+!.env.example
+local_settings.json
+
 # Generated reports and caches
 reports/
 resources/cache/
